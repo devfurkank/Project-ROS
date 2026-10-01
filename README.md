@@ -4,8 +4,8 @@ Robot İşletim Sistemi dersi dönem projesi. TurtleBot3 Burger, Gazebo Classic 
 LiDAR ile engelleri algılar, SLAM Toolbox ile haritayı çalışırken çıkarır ve Nav2 ile
 hedefe engellerden kaçınarak gider.
 
-> **Durum:** Paket iskeleti hazır (Faz 2). Düğümler şimdilik yalnızca başlayıp log yazan
-> iskeletlerdir; dünyalar, launch dosyaları ve senaryo komutları sonraki fazlarda eklenecek.
+> **Durum:** Senaryo 1 dünyası ve simülasyon launch dosyası hazır (Faz 3). Düğümler şimdilik
+> yalnızca başlayıp log yazan iskeletlerdir; navigasyon ve diğer senaryolar sonraki fazlarda eklenecek.
 
 ## Gereksinimler
 
@@ -42,6 +42,29 @@ ros2 pkg list | grep otonom_surus
 ros2 pkg executables otonom_surus
 ```
 
+## Simülasyonu çalıştırma
+
+```bash
+ros2 launch otonom_surus sim.launch.py scenario:=1             # Gazebo penceresiyle
+ros2 launch otonom_surus sim.launch.py scenario:=1 gui:=false  # pencere olmadan (başsız)
+```
+
+| Argüman | Varsayılan | Açıklama |
+| --- | --- | --- |
+| `scenario` | `1` | `worlds/senaryo<N>.world` dünyasını açar |
+| `gui` | `true` | `false` ise yalnızca `gzserver` çalışır |
+
+Robot her senaryoda (0, 0)'da doğar. Kontrol: `ros2 topic echo /odom --once` → konum ≈ (0, 0).
+
+## Senaryolar
+
+Ortak: 6 × 6 m kapalı oda (iç alan x, y ∈ [−1, 5]), engeller 0.5 m yüksekliğinde ilkel şekiller,
+geçitler ≥ 0.75 m.
+
+| Senaryo | Dünya | Hedef(ler) |
+| --- | --- | --- |
+| 1 | 6 dağınık statik engel (3 kutu, 3 silindir); düz rota iki engelle kapalı | (4, 4) |
+
 ## Depo yapısı
 
 ```
@@ -53,8 +76,10 @@ Project-ROS/
     │   ├── obstacle_detector.py   # /scan -> engel listesi (LiDAR kümeleme)
     │   ├── mission_manager.py     # hedefleri sırayla gönderir, metrikleri CSV'ye yazar
     │   └── obstacle_mover.py      # hareketli engelleri sürer
-    ├── launch/                # launch dosyaları
-    ├── worlds/                # Gazebo dünyaları
+    ├── launch/
+    │   └── sim.launch.py      # Gazebo + dünya + robot (scenario:=, gui:=)
+    ├── worlds/
+    │   └── senaryo1.world     # Gazebo dünyaları
     ├── config/                # Nav2, SLAM ve senaryo parametreleri
     └── rviz/                  # RViz2 yapılandırması
 ```
