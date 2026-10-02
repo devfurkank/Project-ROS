@@ -183,7 +183,8 @@ class ObstacleDetector(Node):
 
         if self.pending is not None:
             self.skipped += 1
-            if self.skipped >= 5:  # açılıştaki tek tük kayıplar için uyarma
+            # ~5 s; açılışta slam_toolbox'ın map -> odom'u yayınlamasını beklerken uyarma
+            if self.skipped >= 25:
                 self.get_logger().warn(
                     f'{self.frame_id} <- {scan.header.frame_id} dönüşümü gelmiyor; '
                     f'{self.skipped} taramanın işaretçileri atlandı', throttle_duration_sec=5.0)
