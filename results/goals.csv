@@ -1,0 +1,2 @@
+timestamp,scenario,run_id,goal_index,goal_x,goal_y,goal_yaw_deg,result,duration_s,path_length_m,recoveries,final_error_m
+2026-10-13T14:46:21,1,20261013-144541,1,4.0,4.0,90.0,SUCCEEDED,28.1,5.762,0,0.233

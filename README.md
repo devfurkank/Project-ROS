@@ -6,9 +6,9 @@ hedefe engellerden kaçınarak gider.
 
 > **Durum:** Senaryo 1 dünyası ve simülasyon launch dosyası (Faz 3), LiDAR engel algılama
 > düğümü `obstacle_detector` (Faz 4), SLAM Toolbox + Nav2 ile haritalama, planlama ve kontrol
-> (Faz 5) hazır: RViz'den verilen hedefe robot engellerden kaçınarak gider. `mission_manager` ve
-> `obstacle_mover` şimdilik yalnızca başlayıp log yazan iskeletlerdir; otomatik görev yürütme ve
-> diğer senaryolar sonraki fazlarda eklenecek.
+> (Faz 5), görev yöneticisi `mission_manager` ve tek komutluk `scenario.launch.py` (Faz 6) hazır:
+> senaryo 1 tıklamasız baştan sona koşar, sonuçlar CSV'ye yazılır. `obstacle_mover` şimdilik
+> yalnızca başlayıp log yazan bir iskelettir; senaryo 2 ve 3 sonraki fazda eklenecek.
 
 ## Gereksinimler
 
@@ -46,6 +46,84 @@ ros2 pkg executables otonom_surus
 colcon test --packages-select otonom_surus && colcon test-result --verbose
 ```
 
+`--symlink-install`'sız yapılmış bir kurulumun üstüne `--symlink-install` ile derlerken ilk
+derleme `[Errno 2] No such file or directory: '.../install/...'` ile düşebilir; komutu bir kez daha
+çalıştırmak yeter. Kurulum türü değiştikten sonra açık terminallerde `source install/setup.bash`
+yeniden çalıştırılmalı (ya da yeni terminal açılmalı); yoksa `No module named 'otonom_surus'` hatası
+alınır.
+
+## Senaryoyu tek komutla koşma
+
+```bash
+cd ~/ros2_ws/src/Project-ROS    # sonuçlar deponun results/ klasörüne yazılsın
+ros2 launch otonom_surus scenario.launch.py scenario:=1
+```
+
+Gazebo, SLAM Toolbox + Nav2, `obstacle_detector`, RViz ve `mission_manager` birlikte açılır.
+Tıklama gerekmez: `mission_manager` senaryonun hedeflerini sırayla gönderir, robot engellerden
+kaçınarak gider, sonuçlar yazılır ve launch kendiliğinden kapanır. Pencere açmadan (daha hızlı):
+
+```bash
+ros2 launch otonom_surus scenario.launch.py scenario:=1 gui:=false rviz:=false run_id:=deneme1
+```
+
+| Argüman | Varsayılan | Açıklama |
+| --- | --- | --- |
+| `scenario` | `1` | `config/scenarios.yaml`'daki senaryo numarası |
+| `gui` | `true` | Gazebo penceresini aç |
+| `rviz` | `true` | RViz2 penceresini aç |
+| `run_id` | tarih-saat | Koşunun adı (CSV satırında ve yörünge dosyasının adında) |
+| `goal_timeout` | `180.0` | Hedef başına süre sınırı (sim zamanı, s); aşılırsa hedef iptal edilir, sonuç `TIMEOUT` |
+| `results_dir` | `results` | Sonuç klasörü; göreli yol komutun çalıştırıldığı klasöre göredir |
+| `scenarios_file` | paketteki `config/scenarios.yaml` | Senaryo tanımları (dünya + hedefler) |
+
+### Görev yöneticisi (`mission_manager`)
+
+1. Nav2'nin hazır olmasını bekler: `waitUntilNav2Active(localizer='bt_navigator')`. Varsayılan
+   `localizer='amcl'` bu projede sonsuza kadar bekler: AMCL yok, slam_toolbox da Humble'da
+   lifecycle düğümü değil.
+2. SLAM'ın `map → base_footprint` dönüşümünü ve `/odom`'u bekler.
+3. Hedefleri `NavigateToPose` eylemiyle (`nav2_simple_commander.BasicNavigator.goToPose`) sırayla
+   gönderir. Başarısız hedeften sonra sıradakine geçer (`stop_on_failure:=true` parametresiyle
+   durur).
+4. Bitince sonuçları yazar ve çıkar; `scenario.launch.py` bu çıkışta her şeyi kapatır.
+
+Yol ve yörünge `/odom`'dan ölçülür. Gazebo'da `/odom` dünya gerçeğidir (`diff_drive` eklentisinin
+`odometry_source` varsayılanı `world`). Robot (0, 0)'da doğduğundan koordinatlar dünya
+koordinatlarıyla aynıdır. RViz'deki turuncu iz (`/traveled_path`) ise robotun SLAM'daki konumudur
+(`map` çerçevesi).
+
+| Konu | Tür | Açıklama |
+| --- | --- | --- |
+| `/odom` (girdi) | `nav_msgs/Odometry` | Kat edilen yol, yörünge, hedefe kalan mesafe |
+| `/min_obstacle_distance` (girdi) | `std_msgs/Float32` | `obstacle_detector`'dan; koşudaki en küçük değer kaydedilir |
+| `navigate_to_pose` (eylem) | `nav2_msgs/NavigateToPose` | Hedef gönderimi; geri bildirimden kurtarma sayısı |
+| `/traveled_path` | `nav_msgs/Path` | Gidilen iz, `map` çerçevesinde, 5 Hz |
+
+Çıktılar (`results_dir` altında; dosyalar yoksa oluşturulur, varsa sonlarına eklenir):
+
+| Dosya | İçerik |
+| --- | --- |
+| `runs.csv` | Koşu başına bir satır |
+| `goals.csv` | Hedef başına bir satır: `goal_index`, `goal_x`, `goal_y`, `goal_yaw_deg`, `result`, `duration_s`, `path_length_m`, `recoveries`, `final_error_m` (durulan nokta → hedef) |
+| `trajectories/s<N>_<run_id>.csv` | Yörünge: `t` (s, sim), `x`, `y` (m), 1 cm aralıkla |
+
+`runs.csv` sütunları:
+
+| Sütun | Açıklama |
+| --- | --- |
+| `timestamp`, `scenario`, `run_id` | Koşunun kimliği |
+| `result` | `SUCCEEDED`; değilse ilk başarısız hedefin sonucu: `FAILED` (Nav2 vazgeçti), `TIMEOUT`, `CANCELED`, `REJECTED` |
+| `goals_reached`, `goal_count` | Ulaşılan / toplam hedef |
+| `duration_s` | İlk hedefin gönderilmesinden görevin bitmesine geçen sim zamanı |
+| `wall_duration_s` | Aynı aralık, gerçek zaman (`duration_s / wall_duration_s` = gerçek zaman çarpanı) |
+| `path_length_m` | Kat edilen yol; 1 cm'den küçük adımlar (dururken titreşim) sayılmaz |
+| `straight_line_m` | Başlangıçtan hedeflere sırayla kuş uçuşu mesafe |
+| `path_efficiency` | `straight_line_m / path_length_m` (1 = dümdüz); yalnızca başarılı koşuda |
+| `min_obstacle_dist_m` | LiDAR'dan en yakın yüzeye (engel ya da duvar) en küçük mesafe |
+| `recoveries` | Nav2 kurtarma davranışı sayısı (hedeflerin toplamı) |
+| `failure_reason` | İlk başarısız hedef, sonucu ve hedefe kalan mesafe |
+
 ## Simülasyonu çalıştırma
 
 ```bash
@@ -55,8 +133,9 @@ ros2 launch otonom_surus sim.launch.py scenario:=1 gui:=false  # pencere olmadan
 
 | Argüman | Varsayılan | Açıklama |
 | --- | --- | --- |
-| `scenario` | `1` | `worlds/senaryo<N>.world` dünyasını açar |
+| `scenario` | `1` | Senaryonun `config/scenarios.yaml`'daki dünyasını açar |
 | `gui` | `true` | `false` ise yalnızca `gzserver` çalışır |
+| `scenarios_file` | paketteki `config/scenarios.yaml` | Senaryo tanımları |
 
 Robot her senaryoda (0, 0)'da doğar. Kontrol: `ros2 topic echo /odom --once` → konum ≈ (0, 0).
 
@@ -101,7 +180,7 @@ RViz'de görünenler (sabit çerçeve `map`):
 | Algılanan engeller | `/detected_obstacles` | kırmızı silindir, gri çizgi |
 | Global rota | `/plan` | yeşil |
 | Yerel rota | `/local_plan` | mavi |
-| Gidilen iz | `/traveled_path` | turuncu (`mission_manager` yayınlayacak) |
+| Gidilen iz | `/traveled_path` | turuncu (`mission_manager` yayınlar, yalnızca `scenario.launch.py` ile) |
 
 Zararsız mesajlar:
 
@@ -172,9 +251,23 @@ ros2 run turtlebot3_teleop teleop_keyboard
 Ortak: 6 × 6 m kapalı oda (iç alan x, y ∈ [−1, 5]), engeller 0.5 m yüksekliğinde ilkel şekiller,
 geçitler ≥ 0.75 m.
 
-| Senaryo | Dünya | Hedef(ler) |
+| Senaryo | Dünya | Hedef(ler) (x, y, yaw) |
 | --- | --- | --- |
-| 1 | 6 dağınık statik engel (3 kutu, 3 silindir); düz rota iki engelle kapalı | (4, 4) |
+| 1 | 6 dağınık statik engel (3 kutu, 3 silindir); düz rota iki engelle kapalı | (4, 4, 90°) |
+
+Senaryolar `config/scenarios.yaml`'da tanımlıdır; `sim.launch.py` dünyayı, `mission_manager`
+hedefleri oradan okur:
+
+```yaml
+1:
+  name: Dağınık statik engeller
+  world: senaryo1.world          # worlds/ altındaki dosya ya da mutlak yol
+  goals:                         # sırayla; [x (m), y (m), yaw (derece)], map çerçevesinde
+    - [4.0, 4.0, 90.0]
+```
+
+Paketi değiştirmeden yeni bir görev denemek için kendi dosyanı ver:
+`scenario.launch.py scenarios_file:=/yol/benim.yaml scenario:=<N>`.
 
 ## Depo yapısı
 
@@ -186,16 +279,19 @@ Project-ROS/
     ├── otonom_surus/
     │   ├── obstacle_detector.py   # /scan -> engel listesi (LiDAR kümeleme)
     │   ├── mission_manager.py     # hedefleri sırayla gönderir, metrikleri CSV'ye yazar
+    │   ├── scenarios.py           # scenarios.yaml okuyucu (launch ve mission_manager ortak)
     │   └── obstacle_mover.py      # hareketli engelleri sürer
     ├── launch/
     │   ├── sim.launch.py          # Gazebo + dünya + robot (scenario:=, gui:=)
-    │   └── navigation.launch.py   # slam_toolbox + Nav2 + obstacle_detector + RViz (rviz:=)
+    │   ├── navigation.launch.py   # slam_toolbox + Nav2 + obstacle_detector + RViz (rviz:=)
+    │   └── scenario.launch.py     # hepsi + mission_manager; görev bitince kapanır
     ├── worlds/
     │   └── senaryo1.world         # Gazebo dünyaları
     ├── config/
+    │   ├── scenarios.yaml         # senaryo tanımları: dünya + hedefler
     │   ├── nav2_params.yaml       # Nav2 (planlayıcı, kontrolcü, costmap'ler)
     │   └── slam_params.yaml       # SLAM Toolbox
     ├── rviz/
     │   └── otonom_surus.rviz      # harita, costmap'ler, rotalar, engeller; Nav2 Goal aracı
-    └── test/                      # birim testleri + ament lint testleri
+    └── test/                      # birim testleri (algılama, senaryo/metrik) + ament lint
 ```

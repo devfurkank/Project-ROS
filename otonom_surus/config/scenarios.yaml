@@ -1,0 +1,13 @@
+# Senaryo tanımları. sim.launch.py dünyayı, mission_manager hedefleri buradan okur.
+#
+#   world: worlds/ klasöründeki dünya dosyası (ya da mutlak yol)
+#   goals: sırayla ziyaret edilecek hedefler, [x (m), y (m), yaw (derece)], map çerçevesinde
+#
+# Robot her senaryoda (0, 0)'da +x yönüne bakarak doğar. slam_toolbox map çerçevesini
+# başlangıç konumuna oturttuğu için map koordinatları dünya koordinatlarıyla aynıdır.
+
+1:
+  name: Dağınık statik engeller
+  world: senaryo1.world
+  goals:
+    - [4.0, 4.0, 90.0]

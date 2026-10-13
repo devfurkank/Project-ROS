@@ -1,27 +1,310 @@
-"""Hedefleri sırayla gönderip metrik kaydeden düğüm (iskelet; Faz 6'da doldurulacak)."""
+"""
+Senaryonun hedeflerini Nav2'ye sırayla gönderip koşunun metriklerini kaydeden düğüm.
 
+config/scenarios.yaml'dan senaryonun hedef listesini okur; her hedefi NavigateToPose eylemiyle
+(nav2_simple_commander.BasicNavigator.goToPose) gönderir ve sonucunu bekler. Koşu boyunca süreyi
+(sim zamanı), kat edilen yolu, LiDAR'ın en yakın yüzeye mesafesini ve kurtarma davranışı
+sayısını ölçer. Bitince results_dir altına yazar ve çıkar (scenario.launch.py de kapanır):
+    runs.csv                     koşu başına bir satır
+    goals.csv                    hedef başına bir satır
+    trajectories/s<N>_<run>.csv  robotun yörüngesi
+
+Konular:
+    odom                   (nav_msgs/Odometry)  girdi: yol ve yörünge (Gazebo'da dünya gerçeği)
+    min_obstacle_distance  (std_msgs/Float32)   girdi: obstacle_detector'dan
+    traveled_path          (nav_msgs/Path)      gidilen iz, map çerçevesinde (RViz)
+"""
+
+import csv
+import math
+import os
+import time
+
+from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import PoseStamped
+from nav2_simple_commander.robot_navigator import BasicNavigator
+from nav_msgs.msg import Odometry, Path
+from otonom_surus.scenarios import load_scenario
 import rclpy
-from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
+from rclpy.time import Time
+from std_msgs.msg import Float32
+from tf2_ros import Buffer, TransformException, TransformListener
+
+RUN_FIELDS = [
+    'timestamp', 'scenario', 'run_id', 'result', 'goals_reached', 'goal_count',
+    'duration_s', 'wall_duration_s', 'path_length_m', 'straight_line_m', 'path_efficiency',
+    'min_obstacle_dist_m', 'recoveries', 'failure_reason']
+GOAL_FIELDS = [
+    'timestamp', 'scenario', 'run_id', 'goal_index', 'goal_x', 'goal_y', 'goal_yaw_deg',
+    'result', 'duration_s', 'path_length_m', 'recoveries', 'final_error_m']
 
 
-class MissionManager(Node):
-    """scenarios.yaml hedefleri -> NavigateToPose; sonuçlar -> results/runs.csv."""
+class PathRecorder:
+    """Konumları en az min_step aralıkla kaydeder ve kat edilen yolu toplar."""
+
+    def __init__(self, min_step):
+        self.min_step = min_step
+        self.points = []  # (t, x, y)
+        self.length = 0.0
+
+    def add(self, t, x, y):
+        """
+        Noktayı son kaydedilene en az min_step uzaksa ekler; eklendiyse True döner.
+
+        Robot dururken fizik motorunun milimetre altı titreşimleri böylece yola eklenmez.
+        """
+        if self.points:
+            _, px, py = self.points[-1]
+            step = math.hypot(x - px, y - py)
+            if step < self.min_step:
+                return False
+            self.length += step
+        self.points.append((t, x, y))
+        return True
+
+
+def straight_line_length(start, goals):
+    """Başlangıçtan hedeflere sırayla kuş uçuşu gidilen toplam mesafe."""
+    total, (px, py) = 0.0, start
+    for x, y in goals:
+        total += math.hypot(x - px, y - py)
+        px, py = x, y
+    return total
+
+
+def append_csv(path, fields, row):
+    """Satırı CSV'nin sonuna ekler; dosya yoksa önce başlık satırını yazar."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    new = not os.path.exists(path)
+    with open(path, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        if new:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def goal_pose(x, y, yaw, stamp):
+    """Hedef pozu: map çerçevesinde (x, y) konumu ve yaw yönü."""
+    pose = PoseStamped()
+    pose.header.frame_id = 'map'
+    pose.header.stamp = stamp
+    pose.pose.position.x, pose.pose.position.y = x, y
+    pose.pose.orientation.z = math.sin(yaw / 2.0)
+    pose.pose.orientation.w = math.cos(yaw / 2.0)
+    return pose
+
+
+class MissionManager(BasicNavigator):
+    """scenarios.yaml hedefleri -> NavigateToPose; sonuçlar -> results_dir/*.csv."""
 
     def __init__(self):
-        super().__init__('mission_manager')
-        self.get_logger().info('mission_manager iskeleti çalışıyor (Faz 6 bekleniyor).')
+        super().__init__(node_name='mission_manager')
+        self.scenario = self.declare_parameter('scenario', 1).value
+        self.run_id = (self.declare_parameter('run_id', '').value
+                       or time.strftime('%Y%m%d-%H%M%S'))
+        self.goal_timeout = self.declare_parameter('goal_timeout', 180.0).value
+        self.stop_on_failure = self.declare_parameter('stop_on_failure', False).value
+        self.results_dir = os.path.abspath(os.path.expanduser(
+            self.declare_parameter('results_dir', 'results').value))
+        self.scenarios_file = self.declare_parameter('scenarios_file', os.path.join(
+            get_package_share_directory('otonom_surus'), 'config', 'scenarios.yaml')).value
+
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.recording = False  # ilk hedef gönderilince başlar
+        self.odom_xy = None  # son /odom konumu
+        self.odom_track = PathRecorder(0.01)  # metrikler: Gazebo'nun gerçek konumu
+        self.map_track = PathRecorder(0.05)  # RViz izi: robotun SLAM'daki konumu
+        self.min_distance = math.inf
+        self.t0 = 0.0
+
+        self.create_subscription(Odometry, 'odom', self.on_odom, 10)
+        self.create_subscription(Float32, 'min_obstacle_distance', self.on_distance, 10)
+        self.path_pub = self.create_publisher(Path, 'traveled_path', 10)
+        self.create_timer(0.2, self.update_traveled_path)
+
+    def sim_time(self):
+        """Saniye cinsinden sim zamanı (use_sim_time ile /clock)."""
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def on_odom(self, msg):
+        p = msg.pose.pose.position
+        self.odom_xy = (p.x, p.y)
+        if self.recording:
+            self.odom_track.add(self.sim_time() - self.t0, p.x, p.y)
+
+    def on_distance(self, msg):
+        if self.recording:
+            self.min_distance = min(self.min_distance, msg.data)
+
+    def update_traveled_path(self):
+        """
+        Robotun map çerçevesindeki konumunu ize ekler ve izi yayınlar.
+
+        RViz'in sabit çerçevesi map olduğundan iz de map'te yayınlanır; RViz'in dönüşüm
+        yapması gerekmez (obstacle_detector'daki işaretçilerle aynı gerekçe).
+        """
+        if not self.recording:
+            return
+        try:
+            t = self.tf_buffer.lookup_transform('map', 'base_footprint', Time())
+        except TransformException:
+            return
+        self.map_track.add(0.0, t.transform.translation.x, t.transform.translation.y)
+
+        path = Path()
+        path.header.frame_id = 'map'
+        path.header.stamp = self.get_clock().now().to_msg()
+        for _, x, y in self.map_track.points:
+            pose = PoseStamped(header=path.header)
+            pose.pose.position.x, pose.pose.position.y = x, y
+            pose.pose.orientation.w = 1.0
+            path.poses.append(pose)
+        self.path_pub.publish(path)
+
+    def wait_until_localized(self):
+        """
+        İlk hedeften önce SLAM'ın map -> base_footprint dönüşümünü ve taze /odom'u bekler.
+
+        Sonra kuyrukları boşaltmak için yarım saniye daha döner. waitUntilNav2Active düğümü
+        döndürmeden 2 s uyuduğundan saat (/clock) bayat kalıyor; başlangıç zamanı bayat saatle
+        alınınca süre ~2 s fazla ölçülüyordu (sim süresi gerçek süreyi aşıyordu).
+        """
+        self.odom_xy = None
+        start = time.monotonic()
+        while not (self.odom_xy is not None and self.tf_buffer.can_transform(
+                'map', 'base_footprint', Time())):
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if time.monotonic() - start > 5.0:
+                self.info('map -> base_footprint dönüşümü ve /odom bekleniyor...')
+                start = time.monotonic()
+        drain_until = time.monotonic() + 0.5
+        while time.monotonic() < drain_until:
+            rclpy.spin_once(self, timeout_sec=0.05)
+
+    def navigate(self, index, count, x, y, yaw):
+        """Tek hedefe gider; hedefin sonuç satırını döndürür."""
+        self.info(f'Hedef {index}/{count}: ({x:.2f}, {y:.2f}), yaw {math.degrees(yaw):.0f}°')
+        start, start_length = self.sim_time(), self.odom_track.length
+        self.feedback = None
+        recoveries = 0
+        result = None
+        if not self.goToPose(goal_pose(x, y, yaw, self.get_clock().now().to_msg())):
+            result = 'REJECTED'
+        while result is None and not self.isTaskComplete():
+            if self.feedback is not None:
+                recoveries = max(recoveries, self.feedback.number_of_recoveries)
+            if self.sim_time() - start > self.goal_timeout:
+                self.warn(f'Hedef {index}: {self.goal_timeout:.0f} s içinde varılamadı, '
+                          'iptal ediliyor')
+                self.cancelTask()
+                deadline = time.monotonic() + 5.0
+                while not self.isTaskComplete() and time.monotonic() < deadline:
+                    pass
+                result = 'TIMEOUT'
+        if result is None:
+            result = self.getResult().name
+        if self.feedback is not None:
+            recoveries = max(recoveries, self.feedback.number_of_recoveries)
+
+        error = math.hypot(x - self.odom_xy[0], y - self.odom_xy[1])
+        self.info(f'Hedef {index}/{count}: {result}, hedefe {error:.2f} m, '
+                  f'{recoveries} kurtarma')
+        return {
+            'goal_index': index, 'goal_x': x, 'goal_y': y,
+            'goal_yaw_deg': round(math.degrees(yaw), 1), 'result': result,
+            'duration_s': round(self.sim_time() - start, 2),
+            'path_length_m': round(self.odom_track.length - start_length, 3),
+            'recoveries': recoveries, 'final_error_m': round(error, 3),
+        }
+
+    def run(self):
+        """Görevi baştan sona yürütür ve sonuçları yazar."""
+        scenario = load_scenario(self.scenarios_file, self.scenario)
+        goals = scenario['goals']
+        self.info(f'Senaryo {self.scenario} ({scenario["name"]}), koşu {self.run_id}: '
+                  f'{len(goals)} hedef; sonuçlar {self.results_dir}')
+
+        # T3: varsayılan localizer='amcl' SLAM modunda sonsuza kadar bekler (AMCL yok;
+        # slam_toolbox Humble'da lifecycle düğümü değil).
+        self.waitUntilNav2Active(localizer='bt_navigator')
+        self.wait_until_localized()
+
+        start_xy = self.odom_xy
+        self.t0, wall_start = self.sim_time(), time.monotonic()
+        self.odom_track.add(0.0, *start_xy)
+        self.recording = True
+        results = []
+        for i, (x, y, yaw) in enumerate(goals, 1):
+            results.append(self.navigate(i, len(goals), x, y, yaw))
+            if results[-1]['result'] != 'SUCCEEDED' and self.stop_on_failure:
+                break
+        self.recording = False
+        self.write_results(goals, results, start_xy, time.monotonic() - wall_start)
+
+    def write_results(self, goals, results, start_xy, wall_duration):
+        """runs.csv, goals.csv ve yörünge dosyasını yazar."""
+        stamp = time.strftime('%Y-%m-%dT%H:%M:%S')
+        common = {'timestamp': stamp, 'scenario': self.scenario, 'run_id': self.run_id}
+        reached = sum(r['result'] == 'SUCCEEDED' for r in results)
+        failed = next((r for r in results if r['result'] != 'SUCCEEDED'), None)
+        straight = straight_line_length(start_xy, [(x, y) for x, y, _ in goals])
+        path_length = self.odom_track.length
+        run = {
+            **common,
+            'result': 'SUCCEEDED' if failed is None else failed['result'],
+            'goals_reached': reached, 'goal_count': len(goals),
+            'duration_s': round(self.sim_time() - self.t0, 2),
+            'wall_duration_s': round(wall_duration, 2),
+            'path_length_m': round(path_length, 3),
+            'straight_line_m': round(straight, 3),
+            # Yalnızca başarılı koşuda anlamlı: kuş uçuşu / gidilen yol (1 = dümdüz).
+            'path_efficiency': (round(straight / path_length, 3)
+                                if failed is None and path_length > 0 else ''),
+            'min_obstacle_dist_m': (round(self.min_distance, 3)
+                                    if math.isfinite(self.min_distance) else ''),
+            'recoveries': sum(r['recoveries'] for r in results),
+            'failure_reason': '' if failed is None else (
+                f'hedef {failed["goal_index"]} ({failed["goal_x"]:.2f}, {failed["goal_y"]:.2f}): '
+                f'{failed["result"]}, hedefe {failed["final_error_m"]:.2f} m kala'),
+        }
+
+        append_csv(os.path.join(self.results_dir, 'runs.csv'), RUN_FIELDS, run)
+        for r in results:
+            append_csv(os.path.join(self.results_dir, 'goals.csv'), GOAL_FIELDS,
+                       {**common, **r})
+        trajectory = os.path.join(
+            self.results_dir, 'trajectories', f's{self.scenario}_{self.run_id}.csv')
+        os.makedirs(os.path.dirname(trajectory), exist_ok=True)
+        with open(trajectory, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['t', 'x', 'y'])
+            for t, x, y in self.odom_track.points:
+                writer.writerow([round(t, 2), round(x, 4), round(y, 4)])
+
+        self.info(
+            f'Görev bitti: {run["result"]}, {reached}/{len(goals)} hedef, '
+            f'{run["duration_s"]} s (sim), {run["path_length_m"]} m yol, '
+            f'en yakın yüzey {run["min_obstacle_dist_m"]} m, {run["recoveries"]} kurtarma '
+            f'-> {self.results_dir}')
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = MissionManager()
+    status = 0
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+        node.run()
+    except ValueError as e:  # scenarios.yaml'da senaryo yok ya da biçimi bozuk
+        node.get_logger().error(str(e))
+        status = 1
+    except (KeyboardInterrupt, ExternalShutdownException):
+        node.get_logger().warn('Görev yarıda kesildi; sonuç yazılmadı.')
     finally:
         node.destroy_node()
         rclpy.try_shutdown()
+    return status
 
 
 if __name__ == '__main__':

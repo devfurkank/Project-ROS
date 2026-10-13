@@ -1,0 +1,2 @@
+timestamp,scenario,run_id,result,goals_reached,goal_count,duration_s,wall_duration_s,path_length_m,straight_line_m,path_efficiency,min_obstacle_dist_m,recoveries,failure_reason
+2026-10-13T14:46:21,1,20261013-144541,SUCCEEDED,1,1,28.1,28.52,5.762,5.657,0.982,0.363,0,
