@@ -1,8 +1,10 @@
 """
 Bir senaryoyu tek komutla baştan sona koşar: simülasyon + SLAM/Nav2 + görev yöneticisi.
 
-mission_manager senaryonun hedeflerini sırayla gönderir, sonuçları results_dir'e yazıp çıkar;
-bu launch da onunla birlikte kendiliğinden kapanır.
+Senaryonun hareketli engelleri varsa (scenarios.yaml'da moving_obstacles) sim.launch.py onları
+süren obstacle_mover'ı da başlatır. mission_manager senaryonun hedeflerini sırayla gönderir,
+sonuçları ve SLAM haritasını results_dir'e yazıp çıkar; bu launch da onunla birlikte
+kendiliğinden kapanır.
 
 Kullanım:
     ros2 launch otonom_surus scenario.launch.py scenario:=1 gui:=true rviz:=true run_id:=deneme1

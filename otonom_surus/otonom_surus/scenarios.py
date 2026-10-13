@@ -1,8 +1,8 @@
 """
 Senaryo tanımlarını (config/scenarios.yaml) okur.
 
-sim.launch.py dünya dosyasını, mission_manager hedef listesini buradan alır; böylece bir
-senaryonun tanımı tek yerde durur. ROS'a bağımlı değildir.
+sim.launch.py dünya dosyasını, mission_manager hedef listesini, obstacle_mover hareketli
+engelleri buradan alır; böylece bir senaryonun tanımı tek yerde durur. ROS'a bağımlı değildir.
 """
 
 import math
@@ -14,8 +14,9 @@ def load_scenario(path, number):
     """
     scenarios.yaml'dan bir senaryoyu okur.
 
-    Dönen sözlük: name, world ve goals. goals, [(x, y, yaw_rad), ...] listesidir (dosyada yaw
-    derece). Senaryo yoksa ya da biçimi bozuksa ValueError verir.
+    Dönen sözlük: name, world, goals ve moving_obstacles. goals, [(x, y, yaw_rad), ...]
+    listesidir (dosyada yaw derece). moving_obstacles, [{'name', 'travel', 'speed'}, ...]
+    listesidir; tanımlı değilse boş. Senaryo yoksa ya da biçimi bozuksa ValueError verir.
     """
     with open(path, encoding='utf-8') as f:
         scenarios = yaml.safe_load(f) or {}
@@ -39,8 +40,21 @@ def load_scenario(path, number):
     if not goals:
         raise ValueError(f'senaryo {number}: goals boş')
 
+    obstacles = []
+    for obstacle in scenario.get('moving_obstacles') or []:
+        try:
+            name = obstacle['name']
+            travel, speed = float(obstacle['travel']), float(obstacle['speed'])
+        except (TypeError, KeyError, ValueError):
+            name, travel, speed = None, 0.0, 0.0
+        if not name or not isinstance(name, str) or travel <= 0.0 or speed <= 0.0:
+            raise ValueError(f'senaryo {number}: hareketli engel {{name, travel > 0, '
+                             f'speed > 0}} olmalı: {obstacle!r}')
+        obstacles.append({'name': name, 'travel': travel, 'speed': speed})
+
     return {
         'name': scenario.get('name', f'Senaryo {number}'),
         'world': scenario['world'],
         'goals': goals,
+        'moving_obstacles': obstacles,
     }

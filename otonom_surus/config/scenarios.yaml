@@ -1,7 +1,12 @@
-# Senaryo tanımları. sim.launch.py dünyayı, mission_manager hedefleri buradan okur.
+# Senaryo tanımları. sim.launch.py dünyayı, mission_manager hedefleri, obstacle_mover
+# hareketli engelleri buradan okur.
 #
 #   world: worlds/ klasöründeki dünya dosyası (ya da mutlak yol)
 #   goals: sırayla ziyaret edilecek hedefler, [x (m), y (m), yaw (derece)], map çerçevesinde
+#   moving_obstacles (isteğe bağlı): dünyada gazebo_ros_planar_move eklentili modeller
+#     name:   model adı = eklentinin ad alanı (/<name>/cmd_vel, /<name>/odom)
+#     travel: şerit uzunluğu (m); engel doğduğu yerden kendi +x ekseni boyunca gidip gelir
+#     speed:  hız (m/s); LiDAR 5 Hz olduğundan ≤ 0.15 (T10)
 #
 # Robot her senaryoda (0, 0)'da +x yönüne bakarak doğar. slam_toolbox map çerçevesini
 # başlangıç konumuna oturttuğu için map koordinatları dünya koordinatlarıyla aynıdır.
@@ -11,3 +16,20 @@
   world: senaryo1.world
   goals:
     - [4.0, 4.0, 90.0]
+
+2:
+  name: Zikzak koridor, sıralı hedefler
+  world: senaryo2.world
+  goals:
+    - [4.0, 0.0, 90.0]
+    - [4.0, 4.0, 180.0]
+    - [0.0, 4.0, 180.0]
+
+3:
+  name: Hareketli engeller
+  world: senaryo3.world
+  goals:
+    - [4.0, 4.0, 90.0]
+  moving_obstacles:
+    - {name: engel1, travel: 1.5, speed: 0.15}
+    - {name: engel2, travel: 1.2, speed: 0.12}

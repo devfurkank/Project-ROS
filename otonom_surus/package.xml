@@ -16,8 +16,10 @@
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
   <exec_depend>nav2_simple_commander</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>nav2_rviz_plugins</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>turtlebot3_gazebo</exec_depend>

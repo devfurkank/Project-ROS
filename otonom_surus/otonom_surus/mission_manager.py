@@ -8,6 +8,7 @@ sayısını ölçer. Bitince results_dir altına yazar ve çıkar (scenario.laun
     runs.csv                     koşu başına bir satır
     goals.csv                    hedef başına bir satır
     trajectories/s<N>_<run>.csv  robotun yörüngesi
+    maps/s<N>_<run>.pgm, .yaml   SLAM'ın koşu sonundaki haritası (map_saver_cli)
 
 Konular:
     odom                   (nav_msgs/Odometry)  girdi: yol ve yörünge (Gazebo'da dünya gerçeği)
@@ -18,10 +19,12 @@ Konular:
 import csv
 import math
 import os
+import subprocess
 import time
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from geometry_msgs.msg import PoseStamped
+from lifecycle_msgs.srv import GetState
 from nav2_simple_commander.robot_navigator import BasicNavigator
 from nav_msgs.msg import Odometry, Path
 from otonom_surus.scenarios import load_scenario
@@ -163,12 +166,36 @@ class MissionManager(BasicNavigator):
             path.poses.append(pose)
         self.path_pub.publish(path)
 
+    def _waitForNodeToActivate(self, node_name):
+        """
+        Düğüm 'active' olana kadar bekler; BasicNavigator'ınkinden farkı yanıt zaman aşımı.
+
+        BasicNavigator get_state yanıtını süresiz bekliyor. DDS keşfi tamamlanmadan gelen
+        istekte yanıt ara sıra kayboluyor (bt_navigator: "failed to send response to
+        /bt_navigator/get_state (timeout)") ve görev hiç başlamıyordu (Faz 7'de ~20 koşuda 1).
+        Burada yanıt 2 s içinde gelmezse istek yeniden gönderilir.
+        """
+        client = self.create_client(GetState, f'{node_name}/get_state')
+        while not client.wait_for_service(timeout_sec=1.0):
+            self.info(f'{node_name}/get_state servisi bekleniyor...')
+        state = 'unknown'
+        while state != 'active':
+            future = client.call_async(GetState.Request())
+            rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+            if future.done() and future.result() is not None:
+                state = future.result().current_state.label
+            elif not future.done():
+                self.info(f'{node_name}/get_state yanıt vermedi, yeniden soruluyor')
+            if state != 'active':
+                time.sleep(1.0)
+        self.destroy_client(client)
+
     def wait_until_localized(self):
         """
         İlk hedeften önce SLAM'ın map -> base_footprint dönüşümünü ve taze /odom'u bekler.
 
-        Sonra kuyrukları boşaltmak için yarım saniye daha döner. waitUntilNav2Active düğümü
-        döndürmeden 2 s uyuduğundan saat (/clock) bayat kalıyor; başlangıç zamanı bayat saatle
+        Sonra kuyrukları boşaltmak için yarım saniye daha döner. Nav2 beklenirken düğüm uzun
+        aralıklarla döndüğünden saat (/clock) bayat kalabiliyor; başlangıç zamanı bayat saatle
         alınınca süre ~2 s fazla ölçülüyordu (sim süresi gerçek süreyi aşıyordu).
         """
         self.odom_xy = None
@@ -242,6 +269,7 @@ class MissionManager(BasicNavigator):
                 break
         self.recording = False
         self.write_results(goals, results, start_xy, time.monotonic() - wall_start)
+        self.save_map()
 
     def write_results(self, goals, results, start_xy, wall_duration):
         """runs.csv, goals.csv ve yörünge dosyasını yazar."""
@@ -288,6 +316,33 @@ class MissionManager(BasicNavigator):
             f'{run["duration_s"]} s (sim), {run["path_length_m"]} m yol, '
             f'en yakın yüzey {run["min_obstacle_dist_m"]} m, {run["recoveries"]} kurtarma '
             f'-> {self.results_dir}')
+
+    def save_map(self):
+        """
+        SLAM haritasını maps/s<N>_<run_id>.pgm ve .yaml olarak kaydeder (modül ① kanıtı).
+
+        nav2_map_server'ın map_saver_cli aracını çağırır; slam_toolbox bu düğüm çıkana kadar
+        çalıştığından /map hâlâ yayında. Varsayılan 2 s'lik abonelik beklemesi yetmeyip
+        "Failed to spin map subscription" verebildiği için 10 s verilir (T12). Kayıt
+        başarısız olursa yalnızca uyarı yazılır; koşunun sonuçları zaten yazılmıştır.
+        """
+        prefix = os.path.join(self.results_dir, 'maps', f's{self.scenario}_{self.run_id}')
+        os.makedirs(os.path.dirname(prefix), exist_ok=True)
+        saver = os.path.join(
+            get_package_prefix('nav2_map_server'), 'lib', 'nav2_map_server', 'map_saver_cli')
+        try:
+            done = subprocess.run(
+                [saver, '-f', prefix, '--ros-args', '-p', 'save_map_timeout:=10.0'],
+                capture_output=True, text=True, timeout=30.0)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            self.warn(f'Harita kaydedilemedi: {e}')
+            return
+        if done.returncode == 0:
+            self.info(f'Harita kaydedildi: {prefix}.pgm')
+        else:
+            last = (done.stderr.strip().splitlines() or ['?'])[-1]
+            self.warn(f'Harita kaydedilemedi (map_saver_cli çıkış kodu {done.returncode}): '
+                      f'{last}')
 
 
 def main(args=None):

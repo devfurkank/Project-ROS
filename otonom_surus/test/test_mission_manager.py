@@ -3,6 +3,7 @@
 import csv
 import math
 import os
+import xml.etree.ElementTree as ET
 
 from otonom_surus.mission_manager import append_csv, PathRecorder, straight_line_length
 from otonom_surus.scenarios import load_scenario
@@ -23,7 +24,7 @@ def write_yaml(tmp_path, data):
 def test_paketteki_her_senaryonun_dunyasi_ve_hedefleri_var():
     with open(SCENARIOS, encoding='utf-8') as f:
         numbers = list(yaml.safe_load(f))
-    assert 1 in numbers
+    assert {1, 2, 3} <= set(numbers)
     for number in numbers:
         scenario = load_scenario(SCENARIOS, number)
         assert os.path.isfile(os.path.join(PACKAGE, 'worlds', scenario['world']))
@@ -36,6 +37,38 @@ def test_senaryo1_hedefi():
     [(x, y, yaw)] = scenario['goals']
     assert (x, y) == (4.0, 4.0)
     assert math.isclose(yaw, math.pi / 2)
+    assert scenario['moving_obstacles'] == []
+
+
+def test_senaryo2_hedefleri_sirali():
+    scenario = load_scenario(SCENARIOS, 2)
+    assert [(x, y) for x, y, _ in scenario['goals']] == [(4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]
+
+
+def test_hareketli_engeller_dunyada_planar_move_ile_tanimli():
+    """scenarios.yaml'daki her hareketli engel dünyada sürülebilir ve TF yayınlamıyor (T6)."""
+    scenario = load_scenario(SCENARIOS, 3)
+    names = [o['name'] for o in scenario['moving_obstacles']]
+    assert names == ['engel1', 'engel2']
+    world = ET.parse(os.path.join(PACKAGE, 'worlds', scenario['world'])).getroot()
+    for obstacle in scenario['moving_obstacles']:
+        assert obstacle['speed'] <= 0.15  # LiDAR 5 Hz (T10)
+        [model] = [m for m in world.iter('model') if m.get('name') == obstacle['name']]
+        assert model.findtext('static', 'false') == 'false'
+        [plugin] = [p for p in model.findall('plugin')
+                    if p.get('filename') == 'libgazebo_ros_planar_move.so']
+        assert plugin.findtext('ros/namespace') == '/' + obstacle['name']
+        assert plugin.findtext('publish_odom') == 'true'  # obstacle_mover konumu buradan alır
+        assert plugin.findtext('publish_odom_tf') == 'false'
+
+
+def test_bozuk_hareketli_engel_hata_verir(tmp_path):
+    for obstacle in [{'name': 'e', 'travel': 1.0}, {'name': 'e', 'travel': 0, 'speed': 0.1},
+                     {'travel': 1.0, 'speed': 0.1}, 'engel1']:
+        path = write_yaml(tmp_path, {1: {'world': 'a.world', 'goals': [[1, 2, 0]],
+                                         'moving_obstacles': [obstacle]}})
+        with pytest.raises(ValueError, match='hareketli engel'):
+            load_scenario(path, 1)
 
 
 def test_tanimsiz_senaryo_hata_verir(tmp_path):

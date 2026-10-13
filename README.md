@@ -4,11 +4,11 @@ Robot İşletim Sistemi dersi dönem projesi. TurtleBot3 Burger, Gazebo Classic 
 LiDAR ile engelleri algılar, SLAM Toolbox ile haritayı çalışırken çıkarır ve Nav2 ile
 hedefe engellerden kaçınarak gider.
 
-> **Durum:** Senaryo 1 dünyası ve simülasyon launch dosyası (Faz 3), LiDAR engel algılama
-> düğümü `obstacle_detector` (Faz 4), SLAM Toolbox + Nav2 ile haritalama, planlama ve kontrol
-> (Faz 5), görev yöneticisi `mission_manager` ve tek komutluk `scenario.launch.py` (Faz 6) hazır:
-> senaryo 1 tıklamasız baştan sona koşar, sonuçlar CSV'ye yazılır. `obstacle_mover` şimdilik
-> yalnızca başlayıp log yazan bir iskelettir; senaryo 2 ve 3 sonraki fazda eklenecek.
+> **Durum:** Üç senaryo da tek komutla baştan sona koşar: LiDAR engel algılama
+> (`obstacle_detector`), SLAM Toolbox + Nav2 ile haritalama, planlama ve kontrol, görev yöneticisi
+> (`mission_manager`, çoklu hedef), hareketli engeller (`obstacle_mover`). Sonuçlar CSV'ye, her
+> koşunun SLAM haritası `results/maps/`'e yazılır. Sırada deneyler (3 senaryo × 5 tekrar) ve analiz
+> betiği var.
 
 ## Gereksinimler
 
@@ -46,11 +46,17 @@ ros2 pkg executables otonom_surus
 colcon test --packages-select otonom_surus && colcon test-result --verbose
 ```
 
-`--symlink-install`'sız yapılmış bir kurulumun üstüne `--symlink-install` ile derlerken ilk
-derleme `[Errno 2] No such file or directory: '.../install/...'` ile düşebilir; komutu bir kez daha
-çalıştırmak yeter. Kurulum türü değiştikten sonra açık terminallerde `source install/setup.bash`
-yeniden çalıştırılmalı (ya da yeni terminal açılmalı); yoksa `No module named 'otonom_surus'` hatası
-alınır.
+`--symlink-install`'sız yapılmış bir kurulumun üstüne `--symlink-install` ile derlemek sorun
+çıkarır: ilk derleme `[Errno 2] No such file or directory: '.../install/...'` ile düşebilir ve
+eski derlemeden kalan dosyalar (`config/*.yaml`, `worlds/*.world`, `rviz/*.rviz`) kaynağa bağlantı
+yerine **eski kopyalar olarak kalır**; kaynakta yapılan değişiklikler etkisiz olur. Kurulum türünü
+değiştirirken paketi temiz derle ve açık terminallerde `source install/setup.bash`'i yeniden
+çalıştır (yoksa `No module named 'otonom_surus'` hatası alınır):
+
+```bash
+cd ~/ros2_ws && rm -rf build/otonom_surus install/otonom_surus
+colcon build --symlink-install && source install/setup.bash
+```
 
 ## Senaryoyu tek komutla koşma
 
@@ -59,9 +65,10 @@ cd ~/ros2_ws/src/Project-ROS    # sonuçlar deponun results/ klasörüne yazıls
 ros2 launch otonom_surus scenario.launch.py scenario:=1
 ```
 
-Gazebo, SLAM Toolbox + Nav2, `obstacle_detector`, RViz ve `mission_manager` birlikte açılır.
-Tıklama gerekmez: `mission_manager` senaryonun hedeflerini sırayla gönderir, robot engellerden
-kaçınarak gider, sonuçlar yazılır ve launch kendiliğinden kapanır. Pencere açmadan (daha hızlı):
+Gazebo, SLAM Toolbox + Nav2, `obstacle_detector`, RViz ve `mission_manager` birlikte açılır
+(senaryo 3'te hareketli engelleri süren `obstacle_mover` da). Tıklama gerekmez:
+`mission_manager` senaryonun hedeflerini sırayla gönderir, robot engellerden kaçınarak gider,
+sonuçlar ve harita yazılır, launch kendiliğinden kapanır. Pencere açmadan (daha hızlı):
 
 ```bash
 ros2 launch otonom_surus scenario.launch.py scenario:=1 gui:=false rviz:=false run_id:=deneme1
@@ -86,7 +93,9 @@ ros2 launch otonom_surus scenario.launch.py scenario:=1 gui:=false rviz:=false r
 3. Hedefleri `NavigateToPose` eylemiyle (`nav2_simple_commander.BasicNavigator.goToPose`) sırayla
    gönderir. Başarısız hedeften sonra sıradakine geçer (`stop_on_failure:=true` parametresiyle
    durur).
-4. Bitince sonuçları yazar ve çıkar; `scenario.launch.py` bu çıkışta her şeyi kapatır.
+4. Bitince sonuçları yazar, SLAM haritasını `nav2_map_server`'ın `map_saver_cli` aracıyla kaydeder
+   ve çıkar; `scenario.launch.py` bu çıkışta her şeyi kapatır (slam_toolbox o ana kadar
+   çalıştığından harita hâlâ yayındadır).
 
 Yol ve yörünge `/odom`'dan ölçülür. Gazebo'da `/odom` dünya gerçeğidir (`diff_drive` eklentisinin
 `odometry_source` varsayılanı `world`). Robot (0, 0)'da doğduğundan koordinatlar dünya
@@ -107,6 +116,7 @@ koordinatlarıyla aynıdır. RViz'deki turuncu iz (`/traveled_path`) ise robotun
 | `runs.csv` | Koşu başına bir satır |
 | `goals.csv` | Hedef başına bir satır: `goal_index`, `goal_x`, `goal_y`, `goal_yaw_deg`, `result`, `duration_s`, `path_length_m`, `recoveries`, `final_error_m` (durulan nokta → hedef) |
 | `trajectories/s<N>_<run_id>.csv` | Yörünge: `t` (s, sim), `x`, `y` (m), 1 cm aralıkla |
+| `maps/s<N>_<run_id>.pgm`, `.yaml` | Koşu sonundaki SLAM haritası (`map_server` biçimi, 5 cm/piksel); kaydedilemezse yalnızca uyarı yazılır |
 
 `runs.csv` sütunları:
 
@@ -138,6 +148,8 @@ ros2 launch otonom_surus sim.launch.py scenario:=1 gui:=false  # pencere olmadan
 | `scenarios_file` | paketteki `config/scenarios.yaml` | Senaryo tanımları |
 
 Robot her senaryoda (0, 0)'da doğar. Kontrol: `ros2 topic echo /odom --once` → konum ≈ (0, 0).
+Senaryoda hareketli engel tanımlıysa (senaryo 3) `sim.launch.py` onları süren `obstacle_mover`'ı da
+başlatır; kutular simülasyon açılır açılmaz hareket etmeye başlar.
 
 ## Haritalama ve navigasyon (SLAM Toolbox + Nav2)
 
@@ -206,9 +218,11 @@ Hazır yapılandırmalardan değiştirilen parametreler (dosyalarda `# değişti
 | | `max_vel_x`, `max_speed_xy`, `velocity_smoother` hızları | 0.26 → 0.22 m/s | Burger'in azami hızı |
 | | global costmap `rolling_window`, `width`, `height` | yok → `true`, 16, 16 | Başta küçük olan SLAM haritası uzak hedefi kapsamaz; robotu ortalayan 16 × 16 m pencere odanın tamamını kapsar |
 | | global costmap `track_unknown_space` | true → false | Bilinmeyen alan serbest sayılır; `true` iken NavFn engel gölgelerinde zaman zaman "Failed to create a plan from potential" hatası verip kurtarma davranışı başlatıyordu |
+| | DWB `forward_prune_distance` | 2.0 → 0.7 | DWB eleştirmenlere planın robottan Öklid uzaklığı min(1.5 m, bu değer)'i ilk aşan noktasına kadarki kısmını verir. Senaryo 2'de plan kapıdan geçip duvarın öbür yüzünde geri dönünce dönüş kolu robota ~0.9 m'ye kadar yaklaşıyor; yerel hedef duvarın arkasına düşüyor, GoalDist robotu duvara çekiyor ve robot kapının önünde takılıyordu |
 | `slam_params.yaml` | `min_laser_range`, `max_laser_range` | 0.0, 20.0 → 0.12, 3.5 | Burger LiDAR'ının menzili |
 | | `minimum_travel_distance`, `minimum_travel_heading` | 0.5 → 0.2 | Küçük odada daha sık tarama eklensin |
 | | `map_update_interval` | 5.0 → 2.0 s | Harita daha sık güncellensin |
+| | `do_loop_closing` | true → false | Senaryo 2'nin birbirine benzeyen paralel koridorlarında yanlış döngü kapama `map → odom`'u 2 m kaydırıp haritayı bozuyordu; oda küçük ve Gazebo'da odometri kusursuz olduğundan kapatılacak döngü kayması yok |
 
 ## Engel algılama (`obstacle_detector`)
 
@@ -249,25 +263,56 @@ ros2 run turtlebot3_teleop teleop_keyboard
 ## Senaryolar
 
 Ortak: 6 × 6 m kapalı oda (iç alan x, y ∈ [−1, 5]), engeller 0.5 m yüksekliğinde ilkel şekiller,
-geçitler ≥ 0.75 m.
+geçitler ≥ 0.75 m. Robot her senaryoda (0, 0)'da doğar; harita önceden verilmez.
 
-| Senaryo | Dünya | Hedef(ler) (x, y, yaw) |
-| --- | --- | --- |
-| 1 | 6 dağınık statik engel (3 kutu, 3 silindir); düz rota iki engelle kapalı | (4, 4, 90°) |
+| Senaryo | Dünya | Hedef(ler) (x, y, yaw) | Sınadığı şey |
+| --- | --- | --- | --- |
+| 1 | 6 dağınık statik engel (3 kutu, 3 silindir); düz rota iki engelle kapalı | (4, 4, 90°) | Temel uçtan uca hat |
+| 2 | İki iç duvarla zikzak koridor: `y = 1` duvarının kapısı doğuda (x ∈ [3.6, 4.4]), `y = 3` duvarınınki batıda (x ∈ [−0.4, 0.4]), ikisi de 0.8 m; orta koridorda duvara yaslı kutu (üstünde 0.9 m geçit), alt ve üst koridorda düz rotayı kapatan silindirler | (4, 0, 90°) → (4, 4, 180°) → (0, 4, 180°) | Dar geçit, sıralı görev: ikinci hedef için robot doğu kapısından orta koridora girip batı kapısından üst koridora çıkmak zorunda |
+| 3 | 2 statik engel + robotun düz rotasını kesen 2 hareketli kutu (0.4 m, 5 kg): `engel1` (0.4, 1.5)'ten +x yönünde 1.5 m, 0.15 m/s; `engel2` (3.1, 2.7)'den +y yönünde 1.2 m, 0.12 m/s | (4, 4, 90°) | Hareketli engelden kaçınma, gerçek zamanlı yeniden planlama |
 
 Senaryolar `config/scenarios.yaml`'da tanımlıdır; `sim.launch.py` dünyayı, `mission_manager`
-hedefleri oradan okur:
+hedefleri, `obstacle_mover` hareketli engelleri oradan okur:
 
 ```yaml
-1:
-  name: Dağınık statik engeller
-  world: senaryo1.world          # worlds/ altındaki dosya ya da mutlak yol
+3:
+  name: Hareketli engeller
+  world: senaryo3.world          # worlds/ altındaki dosya ya da mutlak yol
   goals:                         # sırayla; [x (m), y (m), yaw (derece)], map çerçevesinde
     - [4.0, 4.0, 90.0]
+  moving_obstacles:              # isteğe bağlı; dünyadaki planar_move eklentili modeller
+    - {name: engel1, travel: 1.5, speed: 0.15}   # şerit uzunluğu (m), hız (m/s)
+    - {name: engel2, travel: 1.2, speed: 0.12}
 ```
 
 Paketi değiştirmeden yeni bir görev denemek için kendi dosyanı ver:
 `scenario.launch.py scenarios_file:=/yol/benim.yaml scenario:=<N>`.
+
+### Hareketli engeller (`obstacle_mover`)
+
+Her hareketli kutu dünyada `gazebo_ros_planar_move` eklentili, statik olmayan bir modeldir.
+Eklenti `/<ad>/cmd_vel`'i dinler ve kutunun dünyadaki konumunu `/<ad>/odom`'da yayınlar.
+`obstacle_mover` kutuyu doğduğu konumdan kendi +x ekseni boyunca `travel` metre gidip getirir;
+dönüş noktalarını süreyle değil bu konumla belirler, böylece zamanlama sapması ya da robotla temas
+kutuyu şeridinden kaydıramaz. Kutular robottan habersizdir (yol vermez).
+
+| Konu | Tür | Açıklama |
+| --- | --- | --- |
+| `/<ad>/odom` (girdi) | `nav_msgs/Odometry` | Kutunun dünyadaki konumu (eklenti, 10 Hz) |
+| `/<ad>/cmd_vel` | `geometry_msgs/Twist` | Kutunun gövde ekseninde ±`speed` |
+
+| Parametre | Varsayılan | Açıklama |
+| --- | --- | --- |
+| `scenario` | `3` | Hareketli engelleri okunacak senaryo |
+| `scenarios_file` | paketteki `config/scenarios.yaml` | Senaryo tanımları |
+
+Dünya dosyasında dikkat edilenler:
+
+- Eklentide `<publish_odom_tf>false</publish_odom_tf>` **şart**: açık olsaydı eklenti
+  `odom → base_footprint` dönüşümünü yayınlayıp robotun TF ağacını bozardı.
+- Kutunun sürtünmesi 0: eklenti hızı doğrudan atar; zeminle sürtünme kutuyu titretmesin, devirmesin.
+- Şeritler kısa (1.5 m) ve uçlarında ≥ 0.8 m boşluk var. SLAM haritası kutunun geçtiği yerleri bir
+  süre dolu sayabilir ("hayalet iz"); o zaman da şeridin ucundan dolanılabilir.
 
 ## Depo yapısı
 
@@ -280,18 +325,18 @@ Project-ROS/
     │   ├── obstacle_detector.py   # /scan -> engel listesi (LiDAR kümeleme)
     │   ├── mission_manager.py     # hedefleri sırayla gönderir, metrikleri CSV'ye yazar
     │   ├── scenarios.py           # scenarios.yaml okuyucu (launch ve mission_manager ortak)
-    │   └── obstacle_mover.py      # hareketli engelleri sürer
+    │   └── obstacle_mover.py      # hareketli engelleri şeritlerinde git-gel sürer
     ├── launch/
-    │   ├── sim.launch.py          # Gazebo + dünya + robot (scenario:=, gui:=)
+    │   ├── sim.launch.py          # Gazebo + dünya + robot (+ obstacle_mover) (scenario:=, gui:=)
     │   ├── navigation.launch.py   # slam_toolbox + Nav2 + obstacle_detector + RViz (rviz:=)
     │   └── scenario.launch.py     # hepsi + mission_manager; görev bitince kapanır
     ├── worlds/
-    │   └── senaryo1.world         # Gazebo dünyaları
+    │   └── senaryo1.world · senaryo2.world · senaryo3.world
     ├── config/
     │   ├── scenarios.yaml         # senaryo tanımları: dünya + hedefler
     │   ├── nav2_params.yaml       # Nav2 (planlayıcı, kontrolcü, costmap'ler)
     │   └── slam_params.yaml       # SLAM Toolbox
     ├── rviz/
     │   └── otonom_surus.rviz      # harita, costmap'ler, rotalar, engeller; Nav2 Goal aracı
-    └── test/                      # birim testleri (algılama, senaryo/metrik) + ament lint
+    └── test/                      # birim testleri (algılama, senaryo/metrik, şerit) + ament lint
 ```

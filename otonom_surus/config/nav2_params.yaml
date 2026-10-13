@@ -132,6 +132,15 @@ controller_server:
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
       stateful: True
+      # değişti: eklendi (varsayılan 2.0). DWB eleştirmenlere global planın, robottan Öklid
+      # uzaklığı min(1.5 m = yerel costmap'in yarısı, forward_prune_distance)'ı ilk aşan noktasına
+      # kadarki kısmını verir (Humble, shorten_transformed_plan: true). Plan bir kapıdan geçip
+      # duvarın öbür yüzünde geri döndüğünde (senaryo 2) dönüş kolu robota 1.5 m'den yakın
+      # kalıyor, yerel hedef duvarın arkasına düşüyor; GoalDist ona düz (Manhattan) uzaklık
+      # ölçtüğü için robotu duvara çekiyor, robot yerinde kalıyordu. Eşik, 0.15 m'lik duvarın iki
+      # yüzündeki plan kolları arasındaki en küçük aralıktan (0.35 + 0.15 + 0.35 = 0.85 m) küçük
+      # olmalı; 1.0 m'de kapının yanında hâlâ takılıyordu.
+      forward_prune_distance: 0.7
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 0.02
       PathAlign.scale: 32.0
