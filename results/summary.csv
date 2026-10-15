@@ -1,0 +1,4 @@
+scenario,name,runs,succeeded,success_rate,goals_reached,goals_total,duration_mean,duration_std,wall_mean,wall_std,path_mean,path_std,efficiency_mean,efficiency_std,min_dist_mean,min_dist_std,min_dist_min,recoveries_total,final_error_mean,final_error_std,final_error_max,real_time_factor
+1,Dağınık statik engeller,5,5,1.0,5,5,27.92,0.1789,28.01,0.1779,5.7646,0.0102,0.9814,0.0018,0.359,0.0094,0.349,0,0.2288,0.0046,0.233,0.9968
+2,"Zikzak koridor, sıralı hedefler",5,5,1.0,15,15,92.6,0.2449,92.928,0.2495,17.4868,0.0249,0.6864,0.0011,0.3334,0.0029,0.331,1,0.2371,0.0108,0.253,0.9965
+3,Hareketli engeller,5,5,1.0,5,5,28.22,0.2168,28.39,0.1924,5.8978,0.0261,0.9592,0.0045,0.48,0.0121,0.468,0,0.2444,0.0245,0.284,0.994

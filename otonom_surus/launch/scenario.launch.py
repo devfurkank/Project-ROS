@@ -60,6 +60,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'scenarios_file', default_value=os.path.join(share, 'config', 'scenarios.yaml'),
             description='Senaryo tanımları (dünya + hedefler)'),
+        DeclareLaunchArgument(
+            'params_file', default_value=os.path.join(share, 'config', 'nav2_params.yaml'),
+            description='Nav2 parametre dosyası (deneylerde başka bir ayar denemek için)'),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(launch_dir, 'sim.launch.py')),
@@ -70,7 +73,10 @@ def generate_launch_description():
             }.items()),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(launch_dir, 'navigation.launch.py')),
-            launch_arguments={'rviz': arg('rviz')}.items()),
+            launch_arguments={
+                'rviz': arg('rviz'),
+                'params_file': arg('params_file'),
+            }.items()),
         mission_manager,
         RegisterEventHandler(OnProcessExit(
             target_action=mission_manager,

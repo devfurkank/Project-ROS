@@ -27,6 +27,9 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'rviz', default_value='true', description='RViz2 penceresini aç'),
+        DeclareLaunchArgument(
+            'params_file', default_value=os.path.join(share, 'config', 'nav2_params.yaml'),
+            description='Nav2 parametre dosyası (deneylerde başka bir ayar denemek için)'),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(slam_launch, 'online_async_launch.py')),
@@ -38,7 +41,7 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(nav2_launch, 'navigation_launch.py')),
             launch_arguments={
-                'params_file': os.path.join(share, 'config', 'nav2_params.yaml'),
+                'params_file': LaunchConfiguration('params_file'),
                 'use_sim_time': 'true',
             }.items()),
         # İşaretçiler RViz'in sabit çerçevesi map'te yayınlanır. odom'da yayınlansa RViz'in

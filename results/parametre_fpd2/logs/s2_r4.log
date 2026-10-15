@@ -1,0 +1,651 @@
+[INFO] [launch]: All log files can be found below /home/furkan/.ros/log/2026-10-15-14-58-54-194854-Furkan-37797
+[INFO] [launch]: Default logging verbosity is set to INFO
+urdf_file_name : turtlebot3_burger.urdf
+urdf_file_name : turtlebot3_burger.urdf
+urdf_file_name : turtlebot3_burger.urdf
+[INFO] [gzserver-1]: process started with pid [37798]
+[INFO] [robot_state_publisher-2]: process started with pid [37800]
+[INFO] [spawn_entity.py-3]: process started with pid [37802]
+[INFO] [async_slam_toolbox_node-4]: process started with pid [37804]
+[INFO] [controller_server-5]: process started with pid [37806]
+[INFO] [smoother_server-6]: process started with pid [37808]
+[INFO] [planner_server-7]: process started with pid [37810]
+[INFO] [behavior_server-8]: process started with pid [37812]
+[INFO] [bt_navigator-9]: process started with pid [37814]
+[INFO] [waypoint_follower-10]: process started with pid [37816]
+[INFO] [velocity_smoother-11]: process started with pid [37818]
+[INFO] [lifecycle_manager-12]: process started with pid [37822]
+[INFO] [obstacle_detector-13]: process started with pid [37890]
+[INFO] [mission_manager-14]: process started with pid [37895]
+[behavior_server-8] [INFO] [1792065535.361045106] [behavior_server]: 
+[behavior_server-8] 	behavior_server lifecycle node launched. 
+[behavior_server-8] 	Waiting on external lifecycle transitions to activate
+[behavior_server-8] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[velocity_smoother-11] [INFO] [1792065535.370074162] [velocity_smoother]: 
+[velocity_smoother-11] 	velocity_smoother lifecycle node launched. 
+[velocity_smoother-11] 	Waiting on external lifecycle transitions to activate
+[velocity_smoother-11] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[bt_navigator-9] [INFO] [1792065535.388710463] [bt_navigator]: 
+[planner_server-7] [INFO] [1792065535.389223055] [planner_server]: 
+[planner_server-7] 	planner_server lifecycle node launched. 
+[planner_server-7] 	Waiting on external lifecycle transitions to activate
+[planner_server-7] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[bt_navigator-9] 	bt_navigator lifecycle node launched. 
+[bt_navigator-9] 	Waiting on external lifecycle transitions to activate
+[bt_navigator-9] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[bt_navigator-9] [INFO] [1792065535.391768314] [bt_navigator]: Creating
+[planner_server-7] [INFO] [1792065535.391209423] [planner_server]: Creating
+[lifecycle_manager-12] [INFO] [1792065535.391223223] [lifecycle_manager_navigation]: Creating
+[controller_server-5] [INFO] [1792065535.400063281] [controller_server]: 
+[controller_server-5] 	controller_server lifecycle node launched. 
+[controller_server-5] 	Waiting on external lifecycle transitions to activate
+[controller_server-5] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[lifecycle_manager-12] [INFO] [1792065535.402749638] [lifecycle_manager_navigation]: [34m[1mCreating and initializing lifecycle service clients[0m[0m
+[waypoint_follower-10] [INFO] [1792065535.409168835] [waypoint_follower]: 
+[waypoint_follower-10] 	waypoint_follower lifecycle node launched. 
+[waypoint_follower-10] 	Waiting on external lifecycle transitions to activate
+[waypoint_follower-10] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[waypoint_follower-10] [INFO] [1792065535.409681227] [waypoint_follower]: Creating
+[robot_state_publisher-2] [INFO] [1792065535.415288837] [robot_state_publisher]: got segment base_footprint
+[robot_state_publisher-2] [INFO] [1792065535.416728314] [robot_state_publisher]: got segment base_link
+[robot_state_publisher-2] [INFO] [1792065535.417383204] [robot_state_publisher]: got segment base_scan
+[robot_state_publisher-2] [INFO] [1792065535.418448187] [robot_state_publisher]: got segment caster_back_link
+[async_slam_toolbox_node-4] [INFO] [1792065535.418521786] [slam_toolbox]: Node using stack size 40000000
+[robot_state_publisher-2] [INFO] [1792065535.419703267] [robot_state_publisher]: got segment imu_link
+[smoother_server-6] [INFO] [1792065535.420100560] [smoother_server]: 
+[smoother_server-6] 	smoother_server lifecycle node launched. 
+[smoother_server-6] 	Waiting on external lifecycle transitions to activate
+[smoother_server-6] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[robot_state_publisher-2] [INFO] [1792065535.421499438] [robot_state_publisher]: got segment wheel_left_link
+[controller_server-5] [INFO] [1792065535.421901431] [controller_server]: Creating controller server
+[robot_state_publisher-2] [INFO] [1792065535.422924615] [robot_state_publisher]: got segment wheel_right_link
+[smoother_server-6] [INFO] [1792065535.423983298] [smoother_server]: Creating smoother server
+[planner_server-7] [INFO] [1792065535.426158163] [global_costmap.global_costmap]: 
+[planner_server-7] 	global_costmap lifecycle node launched. 
+[planner_server-7] 	Waiting on external lifecycle transitions to activate
+[planner_server-7] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[planner_server-7] [INFO] [1792065535.426667155] [global_costmap.global_costmap]: Creating Costmap
+[controller_server-5] [INFO] [1792065535.496770632] [local_costmap.local_costmap]: 
+[controller_server-5] 	local_costmap lifecycle node launched. 
+[controller_server-5] 	Waiting on external lifecycle transitions to activate
+[controller_server-5] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[controller_server-5] [INFO] [1792065535.497330823] [local_costmap.local_costmap]: Creating Costmap
+[async_slam_toolbox_node-4] [INFO] [1792065535.546684833] [slam_toolbox]: Using solver plugin solver_plugins::CeresSolver
+[async_slam_toolbox_node-4] [INFO] [1792065535.549353190] [slam_toolbox]: CeresSolver: Using SCHUR_JACOBI preconditioner.
+[lifecycle_manager-12] [INFO] [1792065535.571523235] [lifecycle_manager_navigation]: [34m[1mStarting managed nodes bringup...[0m[0m
+[lifecycle_manager-12] [INFO] [1792065535.572020727] [lifecycle_manager_navigation]: [34m[1mConfiguring controller_server[0m[0m
+[controller_server-5] [INFO] [1792065535.572439320] [controller_server]: Configuring controller interface
+[controller_server-5] [INFO] [1792065535.572739215] [controller_server]: getting goal checker plugins..
+[controller_server-5] [INFO] [1792065535.572860813] [controller_server]: Controller frequency set to 20.0000Hz
+[controller_server-5] [INFO] [1792065535.572912612] [local_costmap.local_costmap]: Configuring
+[controller_server-5] [INFO] [1792065535.579904900] [local_costmap.local_costmap]: Using plugin "voxel_layer"
+[controller_server-5] [INFO] [1792065535.590590929] [local_costmap.local_costmap]: Subscribed to Topics: scan
+[controller_server-5] [INFO] [1792065535.604240011] [local_costmap.local_costmap]: Initialized plugin "voxel_layer"
+[controller_server-5] [INFO] [1792065535.604282310] [local_costmap.local_costmap]: Using plugin "inflation_layer"
+[controller_server-5] [INFO] [1792065535.604783202] [local_costmap.local_costmap]: Initialized plugin "inflation_layer"
+[controller_server-5] [INFO] [1792065535.620235654] [controller_server]: Created progress_checker : progress_checker of type nav2_controller::SimpleProgressChecker
+[controller_server-5] [INFO] [1792065535.620924843] [controller_server]: Created goal checker : general_goal_checker of type nav2_controller::SimpleGoalChecker
+[controller_server-5] [INFO] [1792065535.621129540] [controller_server]: Controller Server has general_goal_checker  goal checkers available.
+[controller_server-5] [INFO] [1792065535.622885612] [controller_server]: Created controller : FollowPath of type dwb_core::DWBLocalPlanner
+[controller_server-5] [INFO] [1792065535.623412403] [controller_server]: Setting transform_tolerance to 0.200000
+[controller_server-5] [INFO] [1792065535.636848588] [controller_server]: Using critic "RotateToGoal" (dwb_critics::RotateToGoalCritic)
+[controller_server-5] [INFO] [1792065535.637223282] [controller_server]: Critic plugin initialized
+[controller_server-5] [INFO] [1792065535.637324681] [controller_server]: Using critic "Oscillation" (dwb_critics::OscillationCritic)
+[controller_server-5] [INFO] [1792065535.637555977] [controller_server]: Critic plugin initialized
+[controller_server-5] [INFO] [1792065535.637631076] [controller_server]: Using critic "BaseObstacle" (dwb_critics::BaseObstacleCritic)
+[controller_server-5] [INFO] [1792065535.637723074] [controller_server]: Critic plugin initialized
+[controller_server-5] [INFO] [1792065535.637792573] [controller_server]: Using critic "GoalAlign" (dwb_critics::GoalAlignCritic)
+[controller_server-5] [INFO] [1792065535.637989270] [controller_server]: Critic plugin initialized
+[controller_server-5] [INFO] [1792065535.638084068] [controller_server]: Using critic "PathAlign" (dwb_critics::PathAlignCritic)
+[controller_server-5] [INFO] [1792065535.638266065] [controller_server]: Critic plugin initialized
+[controller_server-5] [INFO] [1792065535.638409763] [controller_server]: Using critic "PathDist" (dwb_critics::PathDistCritic)
+[controller_server-5] [INFO] [1792065535.638553761] [controller_server]: Critic plugin initialized
+[controller_server-5] [INFO] [1792065535.638635260] [controller_server]: Using critic "GoalDist" (dwb_critics::GoalDistCritic)
+[controller_server-5] [INFO] [1792065535.638790057] [controller_server]: Critic plugin initialized
+[controller_server-5] [INFO] [1792065535.638811557] [controller_server]: Controller Server has FollowPath  controllers available.
+[lifecycle_manager-12] [INFO] [1792065535.655995481] [lifecycle_manager_navigation]: [34m[1mConfiguring smoother_server[0m[0m
+[smoother_server-6] [INFO] [1792065535.656940666] [smoother_server]: Configuring smoother server
+[smoother_server-6] [INFO] [1792065535.670262353] [smoother_server]: Created smoother : simple_smoother of type nav2_smoother::SimpleSmoother
+[smoother_server-6] [INFO] [1792065535.671073640] [smoother_server]: Smoother Server has simple_smoother  smoothers available.
+[lifecycle_manager-12] [INFO] [1792065535.682584456] [lifecycle_manager_navigation]: [34m[1mConfiguring planner_server[0m[0m
+[planner_server-7] [INFO] [1792065535.682896451] [planner_server]: Configuring
+[planner_server-7] [INFO] [1792065535.682931450] [global_costmap.global_costmap]: Configuring
+[planner_server-7] [INFO] [1792065535.690205433] [global_costmap.global_costmap]: Using plugin "static_layer"
+[planner_server-7] [INFO] [1792065535.695534548] [global_costmap.global_costmap]: Subscribing to the map topic (/map) with transient local durability
+[planner_server-7] [INFO] [1792065535.697998909] [global_costmap.global_costmap]: Initialized plugin "static_layer"
+[planner_server-7] [INFO] [1792065535.698051408] [global_costmap.global_costmap]: Using plugin "obstacle_layer"
+[planner_server-7] [INFO] [1792065535.700609267] [global_costmap.global_costmap]: Subscribed to Topics: scan
+[planner_server-7] [INFO] [1792065535.709412526] [global_costmap.global_costmap]: Initialized plugin "obstacle_layer"
+[planner_server-7] [INFO] [1792065535.709474325] [global_costmap.global_costmap]: Using plugin "inflation_layer"
+[planner_server-7] [INFO] [1792065535.711611691] [global_costmap.global_costmap]: Initialized plugin "inflation_layer"
+[planner_server-7] [INFO] [1792065535.730038295] [planner_server]: Created global planner plugin GridBased of type nav2_navfn_planner/NavfnPlanner
+[planner_server-7] [INFO] [1792065535.730104994] [planner_server]: Configuring plugin GridBased of type NavfnPlanner
+[planner_server-7] [INFO] [1792065535.733850934] [planner_server]: Planner Server has GridBased  planners available.
+[lifecycle_manager-12] [INFO] [1792065535.782228359] [lifecycle_manager_navigation]: [34m[1mConfiguring behavior_server[0m[0m
+[behavior_server-8] [INFO] [1792065535.782575954] [behavior_server]: Configuring
+[behavior_server-8] [INFO] [1792065535.794100169] [behavior_server]: Creating behavior plugin spin of type nav2_behaviors/Spin
+[behavior_server-8] [INFO] [1792065535.794702259] [behavior_server]: Configuring spin
+[behavior_server-8] [INFO] [1792065535.808232543] [behavior_server]: Creating behavior plugin backup of type nav2_behaviors/BackUp
+[behavior_server-8] [INFO] [1792065535.808863333] [behavior_server]: Configuring backup
+[spawn_entity.py-3] [INFO] [1792065535.816495410] [spawn_entity]: Spawn Entity started
+[spawn_entity.py-3] [INFO] [1792065535.817126900] [spawn_entity]: Loading entity XML from file /opt/ros/humble/share/turtlebot3_gazebo/models/turtlebot3_burger/model.sdf
+[spawn_entity.py-3] [INFO] [1792065535.818272082] [spawn_entity]: Waiting for service /spawn_entity, timeout = 30
+[behavior_server-8] [INFO] [1792065535.818742674] [behavior_server]: Creating behavior plugin drive_on_heading of type nav2_behaviors/DriveOnHeading
+[behavior_server-8] [INFO] [1792065535.819387564] [behavior_server]: Configuring drive_on_heading
+[spawn_entity.py-3] [INFO] [1792065535.819576161] [spawn_entity]: Waiting for service /spawn_entity
+[behavior_server-8] [INFO] [1792065535.830787481] [behavior_server]: Creating behavior plugin assisted_teleop of type nav2_behaviors/AssistedTeleop
+[behavior_server-8] [INFO] [1792065535.832956447] [behavior_server]: Configuring assisted_teleop
+[behavior_server-8] [INFO] [1792065535.847890207] [behavior_server]: Creating behavior plugin wait of type nav2_behaviors/Wait
+[behavior_server-8] [INFO] [1792065535.848718794] [behavior_server]: Configuring wait
+[lifecycle_manager-12] [INFO] [1792065535.858522637] [lifecycle_manager_navigation]: [34m[1mConfiguring bt_navigator[0m[0m
+[bt_navigator-9] [INFO] [1792065535.858861132] [bt_navigator]: Configuring
+[lifecycle_manager-12] [INFO] [1792065536.036003681] [lifecycle_manager_navigation]: [34m[1mConfiguring waypoint_follower[0m[0m
+[waypoint_follower-10] [INFO] [1792065536.036356375] [waypoint_follower]: Configuring
+[waypoint_follower-10] [INFO] [1792065536.057120031] [waypoint_follower]: Created waypoint_task_executor : wait_at_waypoint of type nav2_waypoint_follower::WaitAtWaypoint
+[lifecycle_manager-12] [INFO] [1792065536.059033900] [lifecycle_manager_navigation]: [34m[1mConfiguring velocity_smoother[0m[0m
+[velocity_smoother-11] [INFO] [1792065536.059679989] [velocity_smoother]: Configuring velocity smoother
+[lifecycle_manager-12] [INFO] [1792065536.065504592] [lifecycle_manager_navigation]: [34m[1mActivating controller_server[0m[0m
+[controller_server-5] [INFO] [1792065536.065846587] [controller_server]: Activating
+[controller_server-5] [INFO] [1792065536.065902286] [local_costmap.local_costmap]: Activating
+[controller_server-5] [INFO] [1792065536.065926185] [local_costmap.local_costmap]: Checking transform
+[controller_server-5] [INFO] [1792065536.065964085] [local_costmap.local_costmap]: Timed out waiting for transform from base_link to odom to become available, tf error: Invalid frame ID "odom" passed to canTransform argument target_frame - frame does not exist
+[mission_manager-14] [INFO] [1792065536.382143750] [mission_manager]: Senaryo 2 (Zikzak koridor, sıralı hedefler), koşu r4: 3 hedef; sonuçlar /home/furkan/ros2_ws/src/Project-ROS/results/parametre_fpd2
+[controller_server-5] [INFO] [1792065536.566037406] [local_costmap.local_costmap]: Timed out waiting for transform from base_link to odom to become available, tf error: Invalid frame ID "odom" passed to canTransform argument target_frame - frame does not exist
+[controller_server-5] [INFO] [1792065537.066059699] [local_costmap.local_costmap]: Timed out waiting for transform from base_link to odom to become available, tf error: Invalid frame ID "odom" passed to canTransform argument target_frame - frame does not exist
+[controller_server-5] [INFO] [1792065537.566038655] [local_costmap.local_costmap]: Timed out waiting for transform from base_link to odom to become available, tf error: Invalid frame ID "odom" passed to canTransform argument target_frame - frame does not exist
+[controller_server-5] [INFO] [1792065538.066036081] [local_costmap.local_costmap]: Timed out waiting for transform from base_link to odom to become available, tf error: Invalid frame ID "odom" passed to canTransform argument target_frame - frame does not exist
+[controller_server-5] [INFO] [1792065538.566047857] [local_costmap.local_costmap]: Timed out waiting for transform from base_link to odom to become available, tf error: Invalid frame ID "odom" passed to canTransform argument target_frame - frame does not exist
+[controller_server-5] [INFO] [1792065539.066057951] [local_costmap.local_costmap]: Timed out waiting for transform from base_link to odom to become available, tf error: Invalid frame ID "odom" passed to canTransform argument target_frame - frame does not exist
+[controller_server-5] [INFO] [1792065539.566042008] [local_costmap.local_costmap]: Timed out waiting for transform from base_link to odom to become available, tf error: Invalid frame ID "odom" passed to canTransform argument target_frame - frame does not exist
+[spawn_entity.py-3] [INFO] [1792065539.580790321] [spawn_entity]: Calling service /spawn_entity
+[gzserver-1] [INFO] [1792065539.708898668] [turtlebot3_imu]: <initial_orientation_as_reference> is unset, using default value of false to comply with REP 145 (world as orientation reference)
+[spawn_entity.py-3] [INFO] [1792065539.797462346] [spawn_entity]: Spawn status: SpawnEntity: Successfully spawned entity [burger]
+[gzserver-1] [INFO] [1792065539.933754444] [turtlebot3_diff_drive]: Wheel pair 1 separation set to [0.160000m]
+[gzserver-1] [INFO] [1792065539.933847144] [turtlebot3_diff_drive]: Wheel pair 1 diameter set to [0.066000m]
+[gzserver-1] [INFO] [1792065539.937060625] [turtlebot3_diff_drive]: Subscribed to [/cmd_vel]
+[gzserver-1] [INFO] [1792065539.941118301] [turtlebot3_diff_drive]: Advertise odometry on [/odom]
+[gzserver-1] [INFO] [1792065539.947211365] [turtlebot3_diff_drive]: Publishing odom transforms between [odom] and [base_footprint]
+[INFO] [spawn_entity.py-3]: process has finished cleanly [pid 37802]
+[gzserver-1] [INFO] [1792065539.972295917] [turtlebot3_joint_state]: Going to publish joint [wheel_left_joint]
+[gzserver-1] [INFO] [1792065539.972379217] [turtlebot3_joint_state]: Going to publish joint [wheel_right_joint]
+[controller_server-5] [INFO] [1792065540.066220936] [local_costmap.local_costmap]: start
+[async_slam_toolbox_node-4] Info: clipped range threshold to be within minimum and maximum range!
+[async_slam_toolbox_node-4] Registering sensor: [Custom Described Lidar]
+[obstacle_detector-13] [INFO] [1792065540.216335373] [obstacle_detector]: 1 engel, 1 duvar; en yakın yüzey 0.91 m
+[controller_server-5] [INFO] [1792065540.267851943] [controller_server]: Creating bond (controller_server) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1792065540.376368447] [lifecycle_manager_navigation]: Server controller_server connected with bond.
+[lifecycle_manager-12] [INFO] [1792065540.376444047] [lifecycle_manager_navigation]: [34m[1mActivating smoother_server[0m[0m
+[smoother_server-6] [INFO] [1792065540.376914744] [smoother_server]: Activating
+[smoother_server-6] [INFO] [1792065540.376967043] [smoother_server]: Creating bond (smoother_server) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1792065540.484043657] [lifecycle_manager_navigation]: Server smoother_server connected with bond.
+[lifecycle_manager-12] [INFO] [1792065540.484156556] [lifecycle_manager_navigation]: [34m[1mActivating planner_server[0m[0m
+[planner_server-7] [INFO] [1792065540.484719952] [planner_server]: Activating
+[planner_server-7] [INFO] [1792065540.484780452] [global_costmap.global_costmap]: Activating
+[planner_server-7] [INFO] [1792065540.484796752] [global_costmap.global_costmap]: Checking transform
+[planner_server-7] [INFO] [1792065540.484975451] [global_costmap.global_costmap]: start
+[planner_server-7] [INFO] [1792065541.487352173] [planner_server]: Activating plugin GridBased of type NavfnPlanner
+[planner_server-7] [INFO] [1792065541.489291560] [planner_server]: Creating bond (planner_server) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1792065541.596395717] [lifecycle_manager_navigation]: Server planner_server connected with bond.
+[lifecycle_manager-12] [INFO] [1792065541.596459216] [lifecycle_manager_navigation]: [34m[1mActivating behavior_server[0m[0m
+[behavior_server-8] [INFO] [1792065541.596875813] [behavior_server]: Activating
+[behavior_server-8] [INFO] [1792065541.596911613] [behavior_server]: Activating spin
+[behavior_server-8] [INFO] [1792065541.596926813] [behavior_server]: Activating backup
+[behavior_server-8] [INFO] [1792065541.596938613] [behavior_server]: Activating drive_on_heading
+[behavior_server-8] [INFO] [1792065541.596949713] [behavior_server]: Activating assisted_teleop
+[behavior_server-8] [INFO] [1792065541.596960913] [behavior_server]: Activating wait
+[behavior_server-8] [INFO] [1792065541.596976113] [behavior_server]: Creating bond (behavior_server) to lifecycle manager.
+[planner_server-7] [INFO] [1792065541.597742007] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 84 X 40 at 0.050000 m/pix
+[lifecycle_manager-12] [INFO] [1792065541.704955763] [lifecycle_manager_navigation]: Server behavior_server connected with bond.
+[lifecycle_manager-12] [INFO] [1792065541.705029263] [lifecycle_manager_navigation]: [34m[1mActivating bt_navigator[0m[0m
+[bt_navigator-9] [INFO] [1792065541.705480560] [bt_navigator]: Activating
+[bt_navigator-9] [INFO] [1792065541.811282926] [bt_navigator]: Creating bond (bt_navigator) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1792065541.919007278] [lifecycle_manager_navigation]: Server bt_navigator connected with bond.
+[lifecycle_manager-12] [INFO] [1792065541.919062178] [lifecycle_manager_navigation]: [34m[1mActivating waypoint_follower[0m[0m
+[waypoint_follower-10] [INFO] [1792065541.919410276] [waypoint_follower]: Activating
+[waypoint_follower-10] [INFO] [1792065541.919440375] [waypoint_follower]: Creating bond (waypoint_follower) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1792065542.027351218] [lifecycle_manager_navigation]: Server waypoint_follower connected with bond.
+[lifecycle_manager-12] [INFO] [1792065542.027412418] [lifecycle_manager_navigation]: [34m[1mActivating velocity_smoother[0m[0m
+[velocity_smoother-11] [INFO] [1792065542.027789815] [velocity_smoother]: Activating
+[velocity_smoother-11] [INFO] [1792065542.027837415] [velocity_smoother]: Creating bond (velocity_smoother) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1792065542.135543511] [lifecycle_manager_navigation]: Server velocity_smoother connected with bond.
+[lifecycle_manager-12] [INFO] [1792065542.135603611] [lifecycle_manager_navigation]: [34m[1mManaged nodes are active[0m[0m
+[lifecycle_manager-12] [INFO] [1792065542.135613011] [lifecycle_manager_navigation]: [34m[1mCreating bond timer...[0m[0m
+[mission_manager-14] [INFO] [1792065542.425040651] [mission_manager]: Nav2 is ready for use!
+[mission_manager-14] [INFO] [1792065542.933450758] [mission_manager]: Hedef 1/3: (4.00, 0.00), yaw 90°
+[mission_manager-14] [INFO] [1792065542.934073353] [mission_manager]: Navigating to goal: 4.0 0.0...
+[bt_navigator-9] [INFO] [1792065542.935043546] [bt_navigator]: Begin navigating from current location (0.00, -0.00) to (4.00, 0.00)
+[controller_server-5] [INFO] [1792065542.956453586] [controller_server]: Received a goal, begin computing control effort.
+[controller_server-5] [WARN] [1792065542.956524686] [controller_server]: No goal checker was specified in parameter 'current_goal_checker'. Server will use only plugin loaded general_goal_checker . This warning will appear once.
+[controller_server-5] [INFO] [1792065544.006767631] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065545.056833083] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065545.416738337] [obstacle_detector]: 1 engel, 1 duvar; en yakın yüzey 0.89 m
+[controller_server-5] [INFO] [1792065546.056740767] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065546.485261861] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 90 X 40 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065547.106767208] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065548.106732547] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065548.485295675] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 92 X 40 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065549.156774356] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065550.156779195] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065550.435517995] [obstacle_detector]: 4 engel, 1 duvar; en yakın yüzey 0.47 m
+[planner_server-7] [INFO] [1792065550.485268274] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 109 X 42 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065551.206734671] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065552.206736566] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065552.485274689] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 121 X 42 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065553.256732358] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065554.306767099] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065554.485287894] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 121 X 51 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065555.306776776] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065555.454019413] [obstacle_detector]: 3 engel, 2 duvar; en yakın yüzey 0.54 m
+[controller_server-5] [INFO] [1792065556.356777224] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065556.485282954] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 121 X 54 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065557.356763523] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065558.406758291] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065558.485225521] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 121 X 64 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065559.406786589] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065560.456719606] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065560.470266890] [obstacle_detector]: 1 engel, 3 duvar; en yakın yüzey 0.75 m
+[planner_server-7] [INFO] [1792065560.485172754] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 121 X 79 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065561.456728604] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065562.485185837] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 121 X 80 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065562.506774374] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065563.506768146] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065564.556734916] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065565.060035640] [controller_server]: Reached the goal!
+[bt_navigator-9] [INFO] [1792065565.096183051] [bt_navigator]: Goal succeeded
+[mission_manager-14] [INFO] [1792065565.098383882] [mission_manager]: Hedef 1/3: SUCCEEDED, hedefe 0.23 m, 0 kurtarma
+[mission_manager-14] [INFO] [1792065565.098818588] [mission_manager]: Hedef 2/3: (4.00, 4.00), yaw 180°
+[mission_manager-14] [INFO] [1792065565.099424596] [mission_manager]: Navigating to goal: 4.0 4.0...
+[bt_navigator-9] [INFO] [1792065565.100122006] [bt_navigator]: Begin navigating from current location (3.79, 0.10) to (4.00, 4.00)
+[controller_server-5] [INFO] [1792065565.120988801] [controller_server]: Received a goal, begin computing control effort.
+[obstacle_detector-13] [INFO] [1792065565.481869997] [obstacle_detector]: 1 engel, 3 duvar; en yakın yüzey 0.83 m
+[controller_server-5] [INFO] [1792065566.171266955] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065567.221290505] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065568.221267559] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065569.271255116] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065570.271235904] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065570.491019077] [obstacle_detector]: 4 engel, 2 duvar; en yakın yüzey 0.34 m
+[controller_server-5] [INFO] [1792065571.321221104] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065572.321240033] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065572.485208190] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 121 X 80 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065573.371285865] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065574.421250889] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065575.421265583] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065575.512161913] [obstacle_detector]: 2 engel, 1 duvar; en yakın yüzey 0.66 m
+[controller_server-5] [INFO] [1792065576.471222818] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065576.485220677] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 122 X 80 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065577.521274648] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065578.485193408] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 122 X 82 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065578.521232453] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065579.571301843] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065580.531610105] [obstacle_detector]: 3 engel, 2 duvar; en yakın yüzey 0.39 m
+[controller_server-5] [INFO] [1792065580.571342608] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065581.621244257] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065582.485445854] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 122 X 87 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065582.621221740] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065583.671277418] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065584.485495264] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 122 X 89 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065584.671295168] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065585.550137913] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.47 m
+[controller_server-5] [INFO] [1792065585.721241895] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065586.485210007] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 122 X 92 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065586.721242941] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065587.771315632] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065588.821308636] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065589.821272980] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065590.564839315] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.49 m
+[controller_server-5] [INFO] [1792065590.871322538] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065591.871270307] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065592.921276538] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065593.921222626] [controller_server]: Passing new path to controller.
+[controller_server-5] [ERROR] [1792065594.621391136] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065594.621596547] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[controller_server-5] [INFO] [1792065594.641102908] [local_costmap.local_costmap]: Received request to clear entirely the local_costmap
+[controller_server-5] [INFO] [1792065594.642241770] [controller_server]: Received a goal, begin computing control effort.
+[controller_server-5] [INFO] [1792065594.992574326] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065595.583250213] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.50 m
+[controller_server-5] [INFO] [1792065595.992574605] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065597.042493868] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065598.042580693] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065599.092868224] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065600.142712001] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065600.595684242] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.49 m
+[controller_server-5] [INFO] [1792065601.142500732] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065602.192529412] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065603.192757807] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065604.242544100] [controller_server]: Passing new path to controller.
+[controller_server-5] [ERROR] [1792065604.742574855] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065604.742711358] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[controller_server-5] [INFO] [1792065604.760678609] [local_costmap.local_costmap]: Received request to clear entirely the local_costmap
+[planner_server-7] [INFO] [1792065604.761339626] [global_costmap.global_costmap]: Received request to clear entirely the global_costmap
+[planner_server-7] [WARN] [1792065605.493684230] [planner_server]: Planner loop missed its desired rate of 20.0000 Hz. Current loop rate is 1.4286 Hz
+[controller_server-5] [INFO] [1792065605.511107812] [controller_server]: Received a goal, begin computing control effort.
+[obstacle_detector-13] [INFO] [1792065605.616734491] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.49 m
+[controller_server-5] [INFO] [1792065606.561659545] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065607.611639137] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065608.611671070] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065609.661615295] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065610.637669021] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.49 m
+[controller_server-5] [INFO] [1792065610.661625344] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065611.711633308] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065612.711616269] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065613.761661756] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065614.761662288] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065615.657612570] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.49 m
+[controller_server-5] [ERROR] [1792065615.661704321] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065615.661850919] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[controller_server-5] [INFO] [1792065615.681229487] [local_costmap.local_costmap]: Received request to clear entirely the local_costmap
+[controller_server-5] [INFO] [1792065615.682384573] [controller_server]: Received a goal, begin computing control effort.
+[controller_server-5] [INFO] [1792065615.872706497] [controller_server]: Passing new path to controller.
+[controller_server-5] [WARN] [1792065615.875887259] [controller_server]: Control loop missed its desired rate of 20.0000Hz
+[controller_server-5] [INFO] [1792065616.826234573] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065617.876028468] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065618.926004248] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065619.926251696] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065620.679652529] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.50 m
+[controller_server-5] [INFO] [1792065620.976018168] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065621.976008100] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065623.026043049] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065624.026000727] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065625.076069945] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065625.693442399] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.50 m
+[controller_server-5] [ERROR] [1792065626.026089443] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065626.026336740] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[behavior_server-8] [INFO] [1792065626.043103539] [behavior_server]: Running spin
+[behavior_server-8] [INFO] [1792065626.043262438] [behavior_server]: Turning 1.57 for spin behavior.
+[behavior_server-8] [INFO] [1792065628.643596134] [behavior_server]: spin completed successfully
+[controller_server-5] [INFO] [1792065628.691554457] [controller_server]: Received a goal, begin computing control effort.
+[controller_server-5] [INFO] [1792065629.741872338] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065630.718029495] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.48 m
+[controller_server-5] [INFO] [1792065630.791844812] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065631.791870210] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065632.842281468] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065633.841941418] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065634.891826956] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065635.727856974] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.49 m
+[controller_server-5] [INFO] [1792065635.891825358] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065636.941842868] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065637.941885629] [controller_server]: Passing new path to controller.
+[controller_server-5] [ERROR] [1792065638.741906899] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065638.742062697] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[controller_server-5] [INFO] [1792065638.760663304] [local_costmap.local_costmap]: Received request to clear entirely the local_costmap
+[controller_server-5] [INFO] [1792065638.761643993] [controller_server]: Received a goal, begin computing control effort.
+[controller_server-5] [WARN] [1792065638.876251501] [controller_server]: Control loop missed its desired rate of 20.0000Hz
+[controller_server-5] [INFO] [1792065638.983247987] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065640.026351263] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065640.746396555] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.49 m
+[controller_server-5] [INFO] [1792065641.076367662] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065642.076379562] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065643.126359313] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065644.126337957] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065645.176330270] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065645.746488471] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.48 m
+[controller_server-5] [INFO] [1792065646.176381730] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065647.226404829] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065648.226647085] [controller_server]: Passing new path to controller.
+[controller_server-5] [ERROR] [1792065648.976406278] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065648.976542077] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[behavior_server-8] [INFO] [1792065648.990958321] [behavior_server]: Running wait
+[obstacle_detector-13] [INFO] [1792065650.774454282] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.49 m
+[behavior_server-8] [INFO] [1792065653.991291301] [behavior_server]: wait completed successfully
+[controller_server-5] [INFO] [1792065654.041167279] [controller_server]: Received a goal, begin computing control effort.
+[controller_server-5] [INFO] [1792065655.091490878] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065655.794171232] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.49 m
+[controller_server-5] [INFO] [1792065656.141442407] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065657.141487716] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065658.191521926] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065659.191459755] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065660.241515826] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065660.812480772] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.49 m
+[controller_server-5] [INFO] [1792065661.241441792] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065662.291461309] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065663.341492655] [controller_server]: Passing new path to controller.
+[controller_server-5] [ERROR] [1792065664.141517845] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065664.141664643] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[controller_server-5] [INFO] [1792065664.160678245] [local_costmap.local_costmap]: Received request to clear entirely the local_costmap
+[controller_server-5] [INFO] [1792065664.161526436] [controller_server]: Received a goal, begin computing control effort.
+[controller_server-5] [WARN] [1792065664.274774357] [controller_server]: Control loop missed its desired rate of 20.0000Hz
+[controller_server-5] [INFO] [1792065664.381454347] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065665.375295484] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065665.828420921] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.49 m
+[controller_server-5] [INFO] [1792065666.424871687] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065667.424856545] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065668.474947114] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065669.524868828] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065670.524856624] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065670.835465519] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.49 m
+[controller_server-5] [INFO] [1792065671.574891925] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065672.574909778] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065673.625000201] [controller_server]: Passing new path to controller.
+[controller_server-5] [ERROR] [1792065674.374972965] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065674.375173963] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[behavior_server-8] [INFO] [1792065674.391050095] [behavior_server]: Running backup
+[behavior_server-8] [INFO] [1792065674.391276492] [behavior_server]: DriveOnHeading: no acceleration or deceleration limits set
+[obstacle_detector-13] [INFO] [1792065675.852727658] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.52 m
+[planner_server-7] [INFO] [1792065680.485200059] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 122 X 100 at 0.050000 m/pix
+[obstacle_detector-13] [INFO] [1792065680.871621014] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.77 m
+[behavior_server-8] [INFO] [1792065681.291523533] [behavior_server]: backup completed successfully
+[controller_server-5] [INFO] [1792065681.341542594] [controller_server]: Received a goal, begin computing control effort.
+[controller_server-5] [INFO] [1792065682.391837264] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065683.441946108] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065684.441904006] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065685.491865307] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065685.895387998] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.60 m
+[controller_server-5] [INFO] [1792065686.491884956] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065687.541841783] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065688.541873480] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065689.591874172] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065690.591902866] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065690.914180726] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.60 m
+[controller_server-5] [ERROR] [1792065691.441922670] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065691.442078373] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[controller_server-5] [INFO] [1792065691.460851079] [local_costmap.local_costmap]: Received request to clear entirely the local_costmap
+[controller_server-5] [INFO] [1792065691.461809895] [controller_server]: Received a goal, begin computing control effort.
+[controller_server-5] [INFO] [1792065691.662209067] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065692.662533908] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065693.712057533] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065694.712127547] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065695.762250078] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065695.932853925] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.61 m
+[controller_server-5] [INFO] [1792065696.812354793] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065697.812069781] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065698.862074597] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065699.862091311] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065700.912100338] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065700.949841482] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.57 m
+[controller_server-5] [ERROR] [1792065701.562097711] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065701.562243211] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[controller_server-5] [INFO] [1792065701.580617330] [local_costmap.local_costmap]: Received request to clear entirely the local_costmap
+[planner_server-7] [INFO] [1792065701.581059028] [global_costmap.global_costmap]: Received request to clear entirely the global_costmap
+[planner_server-7] [WARN] [1792065702.493211488] [planner_server]: Planner loop missed its desired rate of 20.0000 Hz. Current loop rate is 1.1111 Hz
+[controller_server-5] [INFO] [1792065702.511128004] [controller_server]: Received a goal, begin computing control effort.
+[controller_server-5] [INFO] [1792065703.561470045] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065704.611488481] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065705.611432491] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065705.968157301] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.57 m
+[controller_server-5] [INFO] [1792065706.611408881] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065707.661467678] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065708.661415516] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065709.711465095] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065710.761455075] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065710.985030669] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.57 m
+[controller_server-5] [INFO] [1792065711.761432429] [controller_server]: Passing new path to controller.
+[controller_server-5] [ERROR] [1792065712.611484647] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065712.611622445] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[controller_server-5] [INFO] [1792065712.630609643] [local_costmap.local_costmap]: Received request to clear entirely the local_costmap
+[controller_server-5] [INFO] [1792065712.631635832] [controller_server]: Received a goal, begin computing control effort.
+[controller_server-5] [INFO] [1792065712.781932132] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065713.831888435] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065714.831936209] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065715.881956256] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065715.996701283] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.56 m
+[controller_server-5] [INFO] [1792065716.881924533] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065717.931905227] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065718.931883601] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065719.981882462] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065721.020061044] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.59 m
+[controller_server-5] [INFO] [1792065721.031921330] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065722.031888796] [controller_server]: Passing new path to controller.
+[controller_server-5] [ERROR] [1792065722.831947982] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065722.832174985] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[behavior_server-8] [INFO] [1792065722.850921302] [behavior_server]: Running spin
+[behavior_server-8] [INFO] [1792065722.851034103] [behavior_server]: Turning 1.57 for spin behavior.
+[behavior_server-8] [INFO] [1792065725.451418022] [behavior_server]: spin completed successfully
+[controller_server-5] [INFO] [1792065725.501389962] [controller_server]: Received a goal, begin computing control effort.
+[obstacle_detector-13] [INFO] [1792065726.043200215] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.58 m
+[controller_server-5] [INFO] [1792065726.551712216] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065727.601766509] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065728.601694267] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065729.651729417] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065730.651764658] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065731.060558710] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.60 m
+[controller_server-5] [INFO] [1792065731.701740424] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065732.701777947] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065733.751772046] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065734.751746322] [controller_server]: Passing new path to controller.
+[controller_server-5] [ERROR] [1792065735.601746421] [controller_server]: Failed to make progress
+[controller_server-5] [WARN] [1792065735.601887219] [controller_server]: [follow_path] [ActionServer] Aborting handle.
+[controller_server-5] [INFO] [1792065735.620962459] [local_costmap.local_costmap]: Received request to clear entirely the local_costmap
+[controller_server-5] [INFO] [1792065735.622082749] [controller_server]: Received a goal, begin computing control effort.
+[controller_server-5] [WARN] [1792065735.676657489] [controller_server]: Control loop missed its desired rate of 20.0000Hz
+[controller_server-5] [INFO] [1792065735.822544659] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065736.078675184] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.61 m
+[controller_server-5] [INFO] [1792065736.822461132] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065737.872352115] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065738.872312751] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065739.922340622] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065740.972353549] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065741.093885475] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.56 m
+[controller_server-5] [INFO] [1792065741.972320119] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065743.022320113] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065744.022549792] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065745.022372336] [controller_server]: Passing new path to controller.
+[mission_manager-14] [WARN] [1792065745.734410473] [mission_manager]: Hedef 2: 180 s içinde varılamadı, iptal ediliyor
+[mission_manager-14] [INFO] [1792065745.734808270] [mission_manager]: Canceling current task.
+[bt_navigator-9] [ERROR] [1792065745.761263775] [bt_navigator_navigate_to_pose_rclcpp_node]: Failed to get result for follow_path in node halt!
+[bt_navigator-9] [INFO] [1792065745.761494473] [bt_navigator]: [navigate_to_pose] [ActionServer] Client requested to cancel the goal. Cancelling.
+[bt_navigator-9] [INFO] [1792065745.761829971] [bt_navigator]: Goal canceled
+[mission_manager-14] [INFO] [1792065745.772370893] [mission_manager]: Hedef 2/3: TIMEOUT, hedefe 3.21 m, 15 kurtarma
+[controller_server-5] [INFO] [1792065745.772387693] [controller_server]: Goal was canceled. Stopping the robot.
+[controller_server-5] [INFO] [1792065745.772453692] [controller_server]: [follow_path] [ActionServer] Client requested to cancel the goal. Cancelling.
+[mission_manager-14] [INFO] [1792065745.772885889] [mission_manager]: Hedef 3/3: (0.00, 4.00), yaw 180°
+[mission_manager-14] [INFO] [1792065745.773619583] [mission_manager]: Navigating to goal: 0.0 4.0...
+[bt_navigator-9] [INFO] [1792065745.774364178] [bt_navigator]: Begin navigating from current location (1.26, 2.35) to (0.00, 4.00)
+[controller_server-5] [INFO] [1792065745.795203924] [controller_server]: Received a goal, begin computing control effort.
+[obstacle_detector-13] [INFO] [1792065746.110940867] [obstacle_detector]: 1 engel, 2 duvar; en yakın yüzey 0.54 m
+[controller_server-5] [INFO] [1792065746.845571815] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065747.895622763] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065748.895578971] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065749.945618417] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065750.485192688] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 122 X 114 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065750.945616548] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065751.129378644] [obstacle_detector]: 0 engel, 3 duvar; en yakın yüzey 0.56 m
+[controller_server-5] [INFO] [1792065751.995560939] [controller_server]: Passing new path to controller.
+[planner_server-7] [INFO] [1792065752.485263622] [global_costmap.global_costmap]: StaticLayer: Resizing static layer to 122 X 122 at 0.050000 m/pix
+[controller_server-5] [INFO] [1792065753.045532457] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065754.045517722] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065755.095555330] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065756.095545718] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065756.145875371] [obstacle_detector]: 4 engel, 2 duvar; en yakın yüzey 0.35 m
+[controller_server-5] [INFO] [1792065757.145610619] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065758.145551973] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065759.195561680] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065760.245553641] [controller_server]: Passing new path to controller.
+[obstacle_detector-13] [INFO] [1792065761.167629926] [obstacle_detector]: 1 engel, 3 duvar; en yakın yüzey 0.77 m
+[controller_server-5] [INFO] [1792065761.245528036] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065762.295557119] [controller_server]: Passing new path to controller.
+[controller_server-5] [INFO] [1792065762.499110632] [controller_server]: Reached the goal!
+[bt_navigator-9] [INFO] [1792065762.535128651] [bt_navigator]: Goal succeeded
+[mission_manager-14] [INFO] [1792065762.536946837] [mission_manager]: Hedef 3/3: SUCCEEDED, hedefe 0.25 m, 0 kurtarma
+[mission_manager-14] [INFO] [1792065762.540015213] [mission_manager]: Görev bitti: TIMEOUT, 2/3 hedef, 218.8 s (sim), 11.064 m yol, en yakın yüzey 0.33 m, 15 kurtarma -> /home/furkan/ros2_ws/src/Project-ROS/results/parametre_fpd2
+[mission_manager-14] [INFO] [1792065764.282515020] [mission_manager]: Harita kaydedildi: /home/furkan/ros2_ws/src/Project-ROS/results/parametre_fpd2/maps/s2_r4.pgm
+[INFO] [mission_manager-14]: process has finished cleanly [pid 37895]
+[INFO] [launch]: process[mission_manager-14] was required: shutting down launched system
+[INFO] [obstacle_detector-13]: sending signal 'SIGINT' to process[obstacle_detector-13]
+[INFO] [lifecycle_manager-12]: sending signal 'SIGINT' to process[lifecycle_manager-12]
+[INFO] [velocity_smoother-11]: sending signal 'SIGINT' to process[velocity_smoother-11]
+[INFO] [waypoint_follower-10]: sending signal 'SIGINT' to process[waypoint_follower-10]
+[INFO] [bt_navigator-9]: sending signal 'SIGINT' to process[bt_navigator-9]
+[INFO] [behavior_server-8]: sending signal 'SIGINT' to process[behavior_server-8]
+[INFO] [planner_server-7]: sending signal 'SIGINT' to process[planner_server-7]
+[INFO] [smoother_server-6]: sending signal 'SIGINT' to process[smoother_server-6]
+[INFO] [controller_server-5]: sending signal 'SIGINT' to process[controller_server-5]
+[INFO] [async_slam_toolbox_node-4]: sending signal 'SIGINT' to process[async_slam_toolbox_node-4]
+[INFO] [robot_state_publisher-2]: sending signal 'SIGINT' to process[robot_state_publisher-2]
+[INFO] [gzserver-1]: sending signal 'SIGINT' to process[gzserver-1]
+[lifecycle_manager-12] [INFO] [1792065764.567547599] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[lifecycle_manager-12] [INFO] [1792065764.567631000] [lifecycle_manager_navigation]: Running Nav2 LifecycleManager rcl preshutdown (lifecycle_manager_navigation)
+[lifecycle_manager-12] [INFO] [1792065764.567698701] [lifecycle_manager_navigation]: [34m[1mTerminating bond timer...[0m[0m
+[velocity_smoother-11] [INFO] [1792065764.569659325] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[velocity_smoother-11] [INFO] [1792065764.569755826] [velocity_smoother]: Running Nav2 LifecycleNode rcl preshutdown (velocity_smoother)
+[velocity_smoother-11] [INFO] [1792065764.569837327] [velocity_smoother]: Deactivating
+[velocity_smoother-11] [INFO] [1792065764.569867627] [velocity_smoother]: Destroying bond (velocity_smoother) to lifecycle manager.
+[waypoint_follower-10] [INFO] [1792065764.572651661] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[waypoint_follower-10] [INFO] [1792065764.572759662] [waypoint_follower]: Running Nav2 LifecycleNode rcl preshutdown (waypoint_follower)
+[waypoint_follower-10] [INFO] [1792065764.572894064] [waypoint_follower]: Deactivating
+[waypoint_follower-10] [INFO] [1792065764.572924864] [waypoint_follower]: Destroying bond (waypoint_follower) to lifecycle manager.
+[bt_navigator-9] [INFO] [1792065764.576084503] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[bt_navigator-9] [INFO] [1792065764.576154504] [bt_navigator]: Running Nav2 LifecycleNode rcl preshutdown (bt_navigator)
+[bt_navigator-9] [INFO] [1792065764.576228605] [bt_navigator]: Deactivating
+[bt_navigator-9] [INFO] [1792065764.576261005] [bt_navigator]: Destroying bond (bt_navigator) to lifecycle manager.
+[behavior_server-8] [INFO] [1792065764.578794836] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[behavior_server-8] [INFO] [1792065764.578871837] [behavior_server]: Running Nav2 LifecycleNode rcl preshutdown (behavior_server)
+[behavior_server-8] [INFO] [1792065764.578942538] [behavior_server]: Deactivating
+[behavior_server-8] [INFO] [1792065764.579016639] [behavior_server]: Destroying bond (behavior_server) to lifecycle manager.
+[velocity_smoother-11] [INFO] [1792065764.580297154] [velocity_smoother]: Cleaning up
+[velocity_smoother-11] [INFO] [1792065764.580357855] [velocity_smoother]: Destroying bond (velocity_smoother) to lifecycle manager.
+[planner_server-7] [INFO] [1792065764.581718572] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[planner_server-7] [INFO] [1792065764.581794873] [planner_server]: Running Nav2 LifecycleNode rcl preshutdown (planner_server)
+[planner_server-7] [INFO] [1792065764.581889074] [planner_server]: Deactivating
+[planner_server-7] [INFO] [1792065764.581937074] [global_costmap.global_costmap]: Deactivating
+[waypoint_follower-10] [INFO] [1792065764.583368592] [waypoint_follower]: Cleaning up
+[velocity_smoother-11] [INFO] [1792065764.584145401] [velocity_smoother]: Destroying
+[smoother_server-6] [INFO] [1792065764.584482705] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[smoother_server-6] [INFO] [1792065764.584626807] [smoother_server]: Running Nav2 LifecycleNode rcl preshutdown (smoother_server)
+[smoother_server-6] [INFO] [1792065764.584696908] [smoother_server]: Deactivating
+[smoother_server-6] [INFO] [1792065764.584724408] [smoother_server]: Destroying bond (smoother_server) to lifecycle manager.
+[bt_navigator-9] [INFO] [1792065764.586707833] [bt_navigator]: Cleaning up
+[controller_server-5] [INFO] [1792065764.587629744] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[controller_server-5] [INFO] [1792065764.587739845] [controller_server]: Running Nav2 LifecycleNode rcl preshutdown (controller_server)
+[controller_server-5] [INFO] [1792065764.587831546] [controller_server]: Deactivating
+[controller_server-5] [INFO] [1792065764.587888847] [local_costmap.local_costmap]: Deactivating
+[behavior_server-8] [INFO] [1792065764.589540467] [behavior_server]: Cleaning up
+[waypoint_follower-10] [INFO] [1792065764.589548167] [waypoint_follower]: Destroying bond (waypoint_follower) to lifecycle manager.
+[async_slam_toolbox_node-4] [INFO] [1792065764.590411678] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[behavior_server-8] [INFO] [1792065764.593225012] [behavior_server]: Destroying bond (behavior_server) to lifecycle manager.
+[robot_state_publisher-2] [INFO] [1792065764.594145223] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[smoother_server-6] [INFO] [1792065764.595080735] [smoother_server]: Cleaning up
+[waypoint_follower-10] [INFO] [1792065764.595463939] [waypoint_follower]: Destroying
+[smoother_server-6] [INFO] [1792065764.609783314] [smoother_server]: Destroying bond (smoother_server) to lifecycle manager.
+[smoother_server-6] [INFO] [1792065764.612235144] [smoother_server]: Destroying
+[behavior_server-8] [INFO] [1792065764.637759456] [behavior_server]: Destroying
+[controller_server-5] [INFO] [1792065764.666458706] [controller_server]: Destroying bond (controller_server) to lifecycle manager.
+[lifecycle_manager-12] [INFO] [1792065764.674727207] [lifecycle_manager_navigation]: Destroying lifecycle_manager_navigation
+[controller_server-5] [INFO] [1792065764.676713731] [controller_server]: Cleaning up
+[controller_server-5] [INFO] [1792065764.676963334] [local_costmap.local_costmap]: Cleaning up
+[controller_server-5] [INFO] [1792065764.695134956] [controller_server]: Destroying bond (controller_server) to lifecycle manager.
+[bt_navigator-9] [INFO] [1792065764.701205630] [bt_navigator]: Completed Cleaning up
+[bt_navigator-9] [INFO] [1792065764.701274031] [bt_navigator]: Destroying bond (bt_navigator) to lifecycle manager.
+[controller_server-5] [INFO] [1792065764.703683460] [local_costmap.local_costmap]: Destroying
+[bt_navigator-9] [INFO] [1792065764.708705022] [bt_navigator]: Destroying
+[controller_server-5] [INFO] [1792065764.712480768] [controller_server]: Destroying
+[INFO] [robot_state_publisher-2]: process has finished cleanly [pid 37800]
+[INFO] [async_slam_toolbox_node-4]: process has finished cleanly [pid 37804]
+[INFO] [velocity_smoother-11]: process has finished cleanly [pid 37818]
+[INFO] [waypoint_follower-10]: process has finished cleanly [pid 37816]
+[INFO] [smoother_server-6]: process has finished cleanly [pid 37808]
+[INFO] [behavior_server-8]: process has finished cleanly [pid 37812]
+[INFO] [obstacle_detector-13]: process has finished cleanly [pid 37890]
+[INFO] [lifecycle_manager-12]: process has finished cleanly [pid 37822]
+[INFO] [bt_navigator-9]: process has finished cleanly [pid 37814]
+[INFO] [controller_server-5]: process has finished cleanly [pid 37806]
+[INFO] [gzserver-1]: process has finished cleanly [pid 37798]
+[planner_server-7] [INFO] [1792065765.485347797] [planner_server]: Deactivating plugin GridBased of type NavfnPlanner
+[planner_server-7] [INFO] [1792065765.485453199] [planner_server]: Destroying bond (planner_server) to lifecycle manager.
+[planner_server-7] [INFO] [1792065765.495594520] [planner_server]: Cleaning up
+[planner_server-7] [INFO] [1792065765.502912908] [global_costmap.global_costmap]: Cleaning up
+[planner_server-7] [INFO] [1792065765.505762142] [planner_server]: Cleaning up plugin GridBased of type NavfnPlanner
+[planner_server-7] [INFO] [1792065765.505863743] [planner_server]: Destroying plugin GridBased of type NavfnPlanner
+[planner_server-7] [INFO] [1792065765.511142407] [planner_server]: Destroying bond (planner_server) to lifecycle manager.
+[planner_server-7] [INFO] [1792065765.514775650] [global_costmap.global_costmap]: Destroying
+[planner_server-7] [INFO] [1792065765.521395629] [planner_server]: Destroying
+[INFO] [planner_server-7]: process has finished cleanly [pid 37810]

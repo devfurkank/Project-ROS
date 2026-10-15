@@ -7,8 +7,8 @@ hedefe engellerden kaçınarak gider.
 > **Durum:** Üç senaryo da tek komutla baştan sona koşar: LiDAR engel algılama
 > (`obstacle_detector`), SLAM Toolbox + Nav2 ile haritalama, planlama ve kontrol, görev yöneticisi
 > (`mission_manager`, çoklu hedef), hareketli engeller (`obstacle_mover`). Sonuçlar CSV'ye, her
-> koşunun SLAM haritası `results/maps/`'e yazılır. Sırada deneyler (3 senaryo × 5 tekrar) ve analiz
-> betiği var.
+> koşunun SLAM haritası `results/maps/`'e yazılır. Deneyler (3 senaryo × 5 tekrar) tek komutla
+> koşulur ve özetlenir; sonuçlar `results/summary.md`'de.
 
 ## Gereksinimler
 
@@ -83,6 +83,7 @@ ros2 launch otonom_surus scenario.launch.py scenario:=1 gui:=false rviz:=false r
 | `goal_timeout` | `180.0` | Hedef başına süre sınırı (sim zamanı, s); aşılırsa hedef iptal edilir, sonuç `TIMEOUT` |
 | `results_dir` | `results` | Sonuç klasörü; göreli yol komutun çalıştırıldığı klasöre göredir |
 | `scenarios_file` | paketteki `config/scenarios.yaml` | Senaryo tanımları (dünya + hedefler) |
+| `params_file` | paketteki `config/nav2_params.yaml` | Nav2 parametre dosyası (paketi değiştirmeden başka bir ayar denemek için) |
 
 ### Görev yöneticisi (`mission_manager`)
 
@@ -134,6 +135,73 @@ koordinatlarıyla aynıdır. RViz'deki turuncu iz (`/traveled_path`) ise robotun
 | `recoveries` | Nav2 kurtarma davranışı sayısı (hedeflerin toplamı) |
 | `failure_reason` | İlk başarısız hedef, sonucu ve hedefe kalan mesafe |
 
+## Deneyler ve analiz
+
+Üç senaryonun her biri 5 kez, her koşu temiz başlayarak (yeni Gazebo, boş SLAM haritası) ve
+pencere açmadan koşulur; ardından özet tablo ve grafikler üretilir:
+
+```bash
+cd ~/ros2_ws/src/Project-ROS
+scripts/run_experiments.sh                    # 15 koşu, ~20 dk; sonuçlar results/
+python3 scripts/analyze_results.py            # results/summary.md, summary.csv, figures/
+```
+
+`run_experiments.sh` her koşuyu `scenario.launch.py scenario:=N gui:=false rviz:=false
+results_dir:=<depo>/results run_id:=rI` ile başlatır. Koşunun sonuçlarını `mission_manager` yazar
+(yukarıdaki tablolar; dosya adları `s<N>_r<I>`). Betik ayrıca:
+
+- Her koşuyu gerçek zamanlı bir sınırla (`-t`, varsayılan 900 s) sarar. `goal_timeout` sim
+  zamanıyla ölçülür; Gazebo çökerse `/clock` durur ve görev hiç bitmez. Sınır aşılınca launch'a
+  SIGINT gider, koşu sonuç yazmadan kapanır ve `experiments.csv`'de `recorded=0` kalır.
+- Koşu bitince launch'ın süreç grubunda kalan her şeyi kapatır (eski bir `gzserver` sonraki
+  koşuda robotun doğmasını engeller). Başta çalışan bir `gzserver` varsa başlamaz.
+- Her denemeyi `experiments.csv`'ye (`timestamp, scenario, run_id, exit_code, wall_s, recorded,
+  note`), launch çıktısını `logs/s<N>_r<I>.log`'a yazar.
+- `runs.csv`'de satırı olan koşuyu atlar: yarıda kesilen deney aynı komutla kaldığı yerden sürer.
+  Ctrl+C o anki koşuyu kaydetmeden durdurur.
+
+| Seçenek | Varsayılan | Açıklama |
+| --- | --- | --- |
+| `-r` | `5` | Senaryo başına tekrar |
+| `-o` | `<depo>/results` | Sonuç klasörü |
+| `-t` | `900` | Koşu başına gerçek zaman sınırı (s); senaryo 2'nin en kötü durumunu (3 × 180 s sim) karşılar |
+| `senaryo ...` | `1 2 3` | Koşulacak senaryolar |
+| `-- argüman:=değer ...` | — | `scenario.launch.py`'ye olduğu gibi geçer (ör. `goal_timeout:=120.0`) |
+
+`analyze_results.py` ROS gerektirmez (pandas, matplotlib, Pillow, PyYAML). Senaryoların dünyasını ve
+hedeflerini deponun `config/scenarios.yaml`'ından okur; başka bir sonuç klasörü için
+`python3 scripts/analyze_results.py <klasör>`. Ürettikleri:
+
+| Dosya | İçerik |
+| --- | --- |
+| `summary.md` | Senaryo başına özet (başarı, süre, yol, verim, en küçük engel mesafesi, kurtarma, hedefte kalan hata; ortalama ± std), hedef başına tablo, başarısız koşuların nedenleri, bütün koşular |
+| `summary.csv` | Senaryo başına özetin sayısal hâli |
+| `figures/metrics.png` | Başarı oranı ve metriklerin ortalama ± std çubuk grafikleri (noktalar tek tek koşular) |
+| `figures/trajectory_s<N>.png` | Senaryonun dünyası (engeller, hareketli engel şeritleri, hedefler) ve bütün koşuların yörüngeleri; başarısız koşu kırmızı |
+| `figures/map_s<N>.png` | Bir koşunun SLAM haritası, üstünde tasarlanan geometri ve o koşunun yörüngesi |
+
+Süre, yol ve verim yalnızca başarılı koşulardan; en küçük engel mesafesi ve kurtarma sayısı sonucu
+kaydedilen bütün koşulardan hesaplanır. `experiments.csv`'de olup `runs.csv`'de satırı olmayan
+koşu başarısız sayılır.
+
+### Ek deneyler
+
+Ana deney sonuçlarına karışmasınlar diye ayrı klasörlere yazılır:
+
+```bash
+# Zor varyant: senaryo 3'ün kutuları 2 kat (senaryo 4) ve 3 kat (senaryo 5) hızlı
+scripts/run_experiments.sh -o results/zor_varyant 4 5
+python3 scripts/analyze_results.py results/zor_varyant
+
+# Parametre duyarlılığı: senaryo 2, DWB forward_prune_distance Nav2 varsayılanında (2.0; projede 0.7)
+mkdir -p results/parametre_fpd2
+sed 's/^\(\s*\)forward_prune_distance: 0.7$/\1forward_prune_distance: 2.0/' \
+  otonom_surus/config/nav2_params.yaml > results/parametre_fpd2/nav2_params.yaml
+scripts/run_experiments.sh -o results/parametre_fpd2 2 -- \
+  params_file:=$PWD/results/parametre_fpd2/nav2_params.yaml
+python3 scripts/analyze_results.py results/parametre_fpd2
+```
+
 ## Simülasyonu çalıştırma
 
 ```bash
@@ -176,6 +244,7 @@ harita robot ilerledikçe büyür.
 | Argüman | Varsayılan | Açıklama |
 | --- | --- | --- |
 | `rviz` | `true` | RViz2 penceresini aç |
+| `params_file` | paketteki `config/nav2_params.yaml` | Nav2 parametre dosyası |
 
 Harita önceden verilmez. Henüz görülmemiş alan serbest sayılır: ilk rota bilinmeyen alandan geçebilir,
 robot ilerledikçe harita dolar ve rota saniyede bir yeniden planlanır. Nav2 `bringup_launch.py`
@@ -271,6 +340,9 @@ geçitler ≥ 0.75 m. Robot her senaryoda (0, 0)'da doğar; harita önceden veri
 | 2 | İki iç duvarla zikzak koridor: `y = 1` duvarının kapısı doğuda (x ∈ [3.6, 4.4]), `y = 3` duvarınınki batıda (x ∈ [−0.4, 0.4]), ikisi de 0.8 m; orta koridorda duvara yaslı kutu (üstünde 0.9 m geçit), alt ve üst koridorda düz rotayı kapatan silindirler | (4, 0, 90°) → (4, 4, 180°) → (0, 4, 180°) | Dar geçit, sıralı görev: ikinci hedef için robot doğu kapısından orta koridora girip batı kapısından üst koridora çıkmak zorunda |
 | 3 | 2 statik engel + robotun düz rotasını kesen 2 hareketli kutu (0.4 m, 5 kg): `engel1` (0.4, 1.5)'ten +x yönünde 1.5 m, 0.15 m/s; `engel2` (3.1, 2.7)'den +y yönünde 1.2 m, 0.12 m/s | (4, 4, 90°) | Hareketli engelden kaçınma, gerçek zamanlı yeniden planlama |
 
+`config/scenarios.yaml`'da ayrıca deneyler için iki varyant vardır: 4 ve 5, senaryo 3'ün aynısı,
+kutular 2 ve 3 kat hızlı (5'te kutular robottan hızlı; T10'daki ≤ 0.15 m/s sınırını bilerek aşar).
+
 Senaryolar `config/scenarios.yaml`'da tanımlıdır; `sim.launch.py` dünyayı, `mission_manager`
 hedefleri, `obstacle_mover` hareketli engelleri oradan okur:
 
@@ -319,6 +391,13 @@ Dünya dosyasında dikkat edilenler:
 ```
 Project-ROS/
 ├── README.md
+├── scripts/
+│   ├── run_experiments.sh     # senaryolar × tekrar, başsız; sonuçlar results/
+│   └── analyze_results.py     # özet tablo (summary.md/.csv) ve grafikler (figures/)
+├── results/                   # deney sonuçları: runs.csv, goals.csv, experiments.csv,
+│                              # trajectories/, maps/, logs/, figures/, summary.md
+├── docs/figures/              # rapor görselleri: Gazebo ve RViz ekran görüntüleri (senaryo başına),
+│                              # TF ağacı, rqt_graph
 └── otonom_surus/              # ROS 2 paketi (ament_python)
     ├── package.xml · setup.py · setup.cfg
     ├── otonom_surus/

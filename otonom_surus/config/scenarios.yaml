@@ -33,3 +33,24 @@
   moving_obstacles:
     - {name: engel1, travel: 1.5, speed: 0.15}
     - {name: engel2, travel: 1.2, speed: 0.12}
+
+# Zor varyantlar (Faz 8 ek deneyi, results/zor_varyant/): senaryo 3'ün dünyası ve hedefi, kutular
+# 2 ve 3 kat hızlı. T10'daki ≤ 0.15 m/s sınırını bilerek aşar; dinamik engelden kaçınmanın nerede
+# bozulduğunu gösterir. Senaryo 5'te kutular robottan (0.22 m/s) hızlıdır.
+4:
+  name: Hareketli engeller, 2 kat hızlı
+  world: senaryo3.world
+  goals:
+    - [4.0, 4.0, 90.0]
+  moving_obstacles:
+    - {name: engel1, travel: 1.5, speed: 0.30}
+    - {name: engel2, travel: 1.2, speed: 0.24}
+
+5:
+  name: Hareketli engeller, 3 kat hızlı
+  world: senaryo3.world
+  goals:
+    - [4.0, 4.0, 90.0]
+  moving_obstacles:
+    - {name: engel1, travel: 1.5, speed: 0.45}
+    - {name: engel2, travel: 1.2, speed: 0.36}

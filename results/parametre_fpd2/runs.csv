@@ -1,0 +1,6 @@
+timestamp,scenario,run_id,result,goals_reached,goal_count,duration_s,wall_duration_s,path_length_m,straight_line_m,path_efficiency,min_obstacle_dist_m,recoveries,failure_reason
+2026-10-15T14:50:52,2,r1,FAILED,2,3,217.1,217.94,12.284,12.0,,0.278,15,"hedef 2 (4.00, 4.00): FAILED, hedefe 3.29 m kala"
+2026-10-15T14:54:48,2,r2,FAILED,2,3,217.6,218.42,11.589,12.0,,0.2,15,"hedef 2 (4.00, 4.00): FAILED, hedefe 2.98 m kala"
+2026-10-15T14:58:44,2,r3,FAILED,2,3,216.6,217.4,11.58,12.0,,0.12,15,"hedef 2 (4.00, 4.00): FAILED, hedefe 2.92 m kala"
+2026-10-15T15:02:42,2,r4,TIMEOUT,2,3,218.8,219.6,11.064,12.0,,0.33,15,"hedef 2 (4.00, 4.00): TIMEOUT, hedefe 3.21 m kala"
+2026-10-15T15:06:38,2,r5,FAILED,2,3,217.8,218.55,11.071,12.0,,0.332,15,"hedef 2 (4.00, 4.00): FAILED, hedefe 3.36 m kala"

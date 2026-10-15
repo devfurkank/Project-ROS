@@ -1,0 +1,3 @@
+scenario,name,runs,succeeded,success_rate,goals_reached,goals_total,duration_mean,duration_std,wall_mean,wall_std,path_mean,path_std,efficiency_mean,efficiency_std,min_dist_mean,min_dist_std,min_dist_min,recoveries_total,final_error_mean,final_error_std,final_error_max,real_time_factor
+4,"Hareketli engeller, 2 kat hızlı",5,5,1.0,5,5,28.22,0.2168,28.44,0.2515,5.8734,0.0515,0.9632,0.0086,0.3106,0.0237,0.287,0,0.1956,0.0413,0.263,0.9923
+5,"Hareketli engeller, 3 kat hızlı",5,5,1.0,5,5,28.1,0.3742,28.3,0.385,5.8716,0.0098,0.9636,0.0015,0.4386,0.0182,0.416,0,0.2216,0.009,0.235,0.9929
