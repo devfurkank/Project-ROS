@@ -16,6 +16,7 @@ setup(
         ('share/' + package_name + '/worlds', glob('worlds/*.world')),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/' + package_name + '/rviz', glob('rviz/*.rviz')),
+        ('share/' + package_name + '/web', glob('web/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -34,6 +35,7 @@ setup(
             'obstacle_detector = otonom_surus.obstacle_detector:main',
             'mission_manager = otonom_surus.mission_manager:main',
             'obstacle_mover = otonom_surus.obstacle_mover:main',
+            'panel_server = otonom_surus.panel_server:main',
         ],
     },
 )

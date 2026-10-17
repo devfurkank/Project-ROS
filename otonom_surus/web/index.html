@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Otonom sürüş paneli</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h6.5a3.5 3.5 0 0 0 0-7h-5a3.5 3.5 0 0 1 0-7H16"/></svg>
+      </div>
+      <div>
+        <h1>Otonom sürüş paneli</h1>
+        <p class="sub"><span id="conn" class="conn wait" role="status"><span class="dot"></span><span id="connText">Bağlanıyor…</span></span> · TurtleBot3 Burger</p>
+      </div>
+    </div>
+    <nav class="seg" id="modes" aria-label="Mod">
+      <button type="button" data-m="live" class="on" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>Canlı görev</button>
+      <button type="button" data-m="replay" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v4l2.5 2.5"/><path d="M3.5 13a8.5 8.5 0 1 0 2.2-6.2L3 9.5"/><path d="M3 4.5v5h5"/></svg>Tekrar oynat</button>
+      <button type="button" data-m="edit" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L18.5 9.5a2.8 2.8 0 0 0-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>Dünya tasarla</button>
+    </nav>
+  </header>
+
+  <main class="grid">
+    <section class="card mapcard" aria-labelledby="mapTitle">
+      <div class="cardhead">
+        <span class="title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7l6-3 6 3 6-3v13l-6 3-6-3-6 3z"/><path d="M9 4v13M15 7v13"/></svg><span id="mapTitle">Canlı harita</span></span>
+        <span id="coord" class="mono"></span>
+      </div>
+      <canvas id="map" aria-label="Harita"></canvas>
+      <p id="hint" class="hint"></p>
+    </section>
+
+    <aside class="side">
+      <section class="card">
+        <p class="label">Sunucu</p>
+        <dl class="kv">
+          <dt>Sürüm</dt><dd id="hVersion">–</dd>
+          <dt>Simülasyon</dt><dd id="hSim">–</dd>
+          <dt>Bağlı sekme</dt><dd id="hClients">–</dd>
+          <dt>Çalışma süresi</dt><dd id="hUptime">–</dd>
+          <dt>Son sinyal</dt><dd id="hSeen">–</dd>
+        </dl>
+        <p class="label spaced">Sonuç klasörü</p>
+        <p id="hResults" class="mono path">–</p>
+      </section>
+      <section class="card">
+        <p class="label">Olaylar</p>
+        <div id="log" class="log mono" aria-live="polite"></div>
+      </section>
+    </aside>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
