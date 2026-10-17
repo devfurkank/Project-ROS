@@ -1,11 +1,13 @@
 """Senaryo okuma ve mission_manager metrik fonksiyonlarının ROS gerektirmeyen birim testleri."""
 
 import csv
+import json
 import math
 import os
 import xml.etree.ElementTree as ET
 
-from otonom_surus.mission_manager import append_csv, PathRecorder, straight_line_length
+from otonom_surus.mission_manager import (
+    append_csv, mission_status, PathRecorder, RECOVERY_HOLD, straight_line_length)
 from otonom_surus.scenarios import load_scenario, scenario_numbers
 import pytest
 import yaml
@@ -110,6 +112,57 @@ def test_kus_ucusu_mesafe_hedefleri_sirayla_dolasir():
     goals = [(4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]
     assert math.isclose(straight_line_length((0.0, 0.0), goals), 12.0)
     assert math.isclose(straight_line_length((0.0, 0.0), [(3.0, 4.0)]), 5.0)
+
+
+GOALS = [(4.0, 0.0, math.pi / 2), (4.0, 4.0, math.pi), (0.0, 4.0, -math.pi / 2)]
+
+
+def goal_row(result, recoveries):
+    """navigate()'in döndürdüğü satırın durum için gereken alanları."""
+    return {'result': result, 'recoveries': recoveries}
+
+
+def test_durum_nav2_beklenirken():
+    status = mission_status(2, 'p1', '/tmp/r', 'waiting_nav2', GOALS, [], now=12.0)
+    assert status == {
+        'v': 1, 'mode': 'scenario', 'state': 'waiting_nav2', 'scenario': 2, 'run_id': 'p1',
+        'results_dir': '/tmp/r', 't0': None, 't': None, 'goal_index': None, 'goal_count': 3,
+        'goal': None, 'goal_results': [], 'recoveries': 0, 'distance': 0.0,
+        'min_obstacle': None}
+    json.dumps(status, allow_nan=False)  # tarayıcının JSON.parse'ı Infinity'yi kabul etmez
+
+
+def test_durum_hedef_sonuclari_ve_kurtarma_toplami():
+    done = [goal_row('SUCCEEDED', 2), goal_row('FAILED', 15)]
+    status = mission_status(2, 'p1', '/tmp/r', 'running', GOALS, done, now=150.0, t0=20.0,
+                            current=3, current_recoveries=1, distance=12.34567,
+                            min_distance=0.4567)
+    assert status['state'] == 'running' and status['t'] == 130.0 and status['t0'] == 20.0
+    assert status['goal_index'] == 3 and status['goal'] == [0.0, 4.0, -90.0]
+    assert status['goal_results'] == ['SUCCEEDED', 'FAILED']
+    assert status['recoveries'] == 2 + 15 + 1
+    assert status['distance'] == 12.346 and status['min_obstacle'] == 0.457
+    assert 'result' not in status
+
+
+def test_durum_kurtarma_bir_sure_recovering_kalir():
+    def state(now):
+        return mission_status(1, 'p', '', 'running', GOALS, [], now=now, t0=0.0, current=1,
+                              current_recoveries=1, last_recovery=40.0)['state']
+    assert state(40.0) == 'recovering'
+    assert state(40.0 + RECOVERY_HOLD - 0.1) == 'recovering'
+    assert state(40.0 + RECOVERY_HOLD + 0.1) == 'running'
+
+
+def test_durum_bitince_sonuc():
+    ok = [goal_row('SUCCEEDED', 0)] * 3
+    status = mission_status(2, 'p', '', 'finished', GOALS, ok, now=93.0, t0=1.0,
+                            last_recovery=92.0)
+    assert status['state'] == 'finished' and status['result'] == 'SUCCEEDED'
+    assert status['goal_index'] is None and status['t'] == 92.0
+    failed = [goal_row('SUCCEEDED', 0), goal_row('TIMEOUT', 3), goal_row('FAILED', 1)]
+    status = mission_status(2, 'p', '', 'finished', GOALS, failed, now=300.0, t0=1.0)
+    assert status['result'] == 'TIMEOUT' and status['recoveries'] == 4
 
 
 def test_csv_basligi_bir_kez_yazilir(tmp_path):

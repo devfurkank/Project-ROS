@@ -5,7 +5,8 @@ Tek süreçte hem ROS düğümü hem HTTP sunucusu çalışır. ROS ana iş par�
 istekleri ThreadingHTTPServer'ın iş parçacıklarında karşılanır. Canlı veri tarayıcıya
 Server-Sent Events (SSE) ile akar: bağlı her sekmenin bir kuyruğu vardır, Broadcaster olayları
 bütün kuyruklara dağıtır, /api/stream isteği kendi kuyruğunu boşaltır. Koşuları panel_process'in
-RunManager'ı alt süreç olarak başlatır ve durdurur. Ek kütüphane gerekmez.
+RunManager'ı alt süreç olarak başlatır ve durdurur; ROS konularını panel_live'ın LiveBridge'i
+önbelleğe alıp hız sınırlı olaylar olarak gönderir. Python standart kütüphanesi ve Pillow yeter.
 
 Sunucu yalnızca 127.0.0.1'e bağlanır (kimlik doğrulama yok); WSL2'nin localhost yönlendirmesi
 sayesinde Windows tarayıcısından http://localhost:<port> ile açılır.
@@ -13,7 +14,8 @@ sayesinde Windows tarayıcısından http://localhost:<port> ile açılır.
 Uç noktalar:
     GET  /                web/ klasöründeki arayüz (index.html, app.js, style.css)
     GET  /api/health      sunucu durumu
-    GET  /api/stream      SSE: hello (durum + son günlük), ping, run, log, run_finished
+    GET  /api/stream      SSE: hello (durum, son günlük, canlı verinin son hali), ping, run, log,
+                          run_finished; canlı: status, pose, trail, plan, map (panel_live)
     GET  /api/worlds      paketteki dünyaların geometrisi (world_sdf)
     GET  /api/scenarios   scenarios.yaml'daki senaryolar (hedef yaw'ları derece)
     GET  /api/run         koşunun durumu
@@ -36,6 +38,7 @@ from urllib.parse import unquote, urlsplit
 import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
+from otonom_surus.panel_live import LiveBridge
 from otonom_surus.panel_process import RunError, RunManager
 from otonom_surus.scenarios import load_scenario, scenario_numbers
 from otonom_surus.world_sdf import world_geometry
@@ -43,7 +46,7 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
-VERSION = '0.2.0'
+VERSION = '0.3.0'
 HOST = '127.0.0.1'  # bilerek parametre değil: panelin ağa açılmaması için (PT18)
 PING_PERIOD = 5.0  # s; istemci 10 s veri alamazsa bağlantıyı kopmuş sayar
 SSE_RETRY_MS = 3000  # tarayıcının kopunca yeniden bağlanma aralığı
@@ -271,11 +274,33 @@ class PanelServer(Node):
         self.scenarios_file = self.declare_parameter('scenarios_file', default_scenarios).value
         self.worlds_dir = os.path.join(share, 'worlds')
         self.broadcaster = Broadcaster()
+        self.live = LiveBridge(self, self.broadcaster.publish, on_status=self.on_mission_status,
+                               movers=self.mover_names())
         # scenarios_file varsayılansa komuta yazılmaz (launch'ın varsayılanı aynı dosya).
         custom = None if self.scenarios_file == default_scenarios else self.scenarios_file
-        self.runs = RunManager(self.results_dir, self.broadcaster.publish,
+        self.runs = RunManager(self.results_dir, self.on_run_event,
                                scenarios_file=custom, cwd=os.getcwd())
         self.started = time.monotonic()
+
+    def mover_names(self):
+        """Bütün senaryolardaki hareketli kutuların adları (canlı konumları için abone olunur)."""
+        names = set()
+        try:
+            for number in scenario_numbers(self.scenarios_file):
+                names.update(o['name'] for o in
+                             load_scenario(self.scenarios_file, number)['moving_obstacles'])
+        except (OSError, ValueError) as e:
+            self.get_logger().warn(f'{self.scenarios_file}: {e}; hareketli kutular izlenmeyecek')
+        return sorted(names)
+
+    def on_run_event(self, event, data):
+        """RunManager'ın olayları; yeni koşu başlarken önceki koşunun canlı verisi silinir."""
+        if event == 'run' and data.get('phase') == 'starting':
+            self.live.reset()
+        self.broadcaster.publish(event, data)
+
+    def on_mission_status(self, status):
+        self.runs.on_status(status)
 
     def health(self):
         return {
@@ -290,8 +315,9 @@ class PanelServer(Node):
         }
 
     def hello(self):
-        """Yeni bağlanan sekmeye: sağlık, koşunun durumu ve son günlük satırları."""
-        return {**self.health(), 'run': self.runs.state(), 'log': self.runs.recent_log()}
+        """Yeni bağlanan sekmeye: sağlık, koşunun durumu, son günlük ve canlı verinin son hali."""
+        return {**self.health(), 'run': self.runs.state(), 'log': self.runs.recent_log(),
+                'live': self.live.snapshot()}
 
     def api(self, method, path, body):
         if method == 'GET':

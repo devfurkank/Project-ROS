@@ -1,4 +1,8 @@
-"""panel_process'in ROS'suz birim testleri: satır ayrıştırma, süreç grubu, koşu aşamaları."""
+"""
+panel_process'in ROS'suz birim testleri: satır ayrıştırma, süreç grubu, koşu aşamaları.
+
+Koşunun aşaması /mission_status'tan izlenir; testlerde bu iletiler on_status'a doğrudan verilir.
+"""
 
 import os
 import threading
@@ -137,21 +141,45 @@ def manager(tmp_path, events, command, gazebo=False):
                       gazebo_check=lambda: gazebo, leftover_grace=0.3)
 
 
+def status(run_id, state, **fields):
+    """mission_manager'ın /mission_status iletisine benzeyen sözlük."""
+    return {'v': 1, 'run_id': run_id, 'state': state, 'goal_index': None, 'goal_count': 2,
+            'goal_results': [], 'recoveries': 0, **fields}
+
+
 def test_kosu_asamalari_ve_sonuc(tmp_path):
     events = Events()
+    done = tmp_path / 'bitir'
     runs = manager(tmp_path, events, fake_launch(
-        ['Senaryo 2 (Zikzak), koşu p: 2 hedef', 'Hedef 1/2: (4.00, 0.00), yaw 90°',
-         'Hedef 1/2: SUCCEEDED, hedefe 0.24 m, 22.1 s', 'Hedef 2/2: (4.00, 4.00), yaw 180°',
-         'Hedef 2/2: FAILED, hedefe 3.29 m, 178.7 s', 'Görev bitti: FAILED, 1/2 hedef, 201 s'],
-        csv_row='{scenario},{run_id},FAILED,1,2'))
+        ['Senaryo 2 (Zikzak), koşu p: 2 hedef', 'Hedef 1/2: (4.00, 0.00), yaw 90°'],
+        csv_row='{scenario},{run_id},FAILED,1,2',
+        tail=f'while [ ! -e {done} ]; do sleep 0.05; done; exit 0'))
     state = runs.start(2, gui=False)
-    assert state['phase'] == 'starting' and state['run_id'].startswith('p')
+    rid = state['run_id']
+    assert state['phase'] == 'starting' and rid.startswith('p')
     assert 'scenario:=2' not in state['command']  # sahte komut; gerçek komut testi yukarıda
+
+    runs.on_status(status(rid, 'waiting_nav2'))  # aşama aynı, hedef sayısı öğrenildi
+    runs.on_status(status(rid, 'running', goal_index=1))
+    runs.on_status(status(rid, 'running', goal_index=1))  # 1 Hz tekrarı: olay yok
+    runs.on_status(status('baska', 'finished', result='SUCCEEDED'))  # başka koşu: yok sayılır
+    runs.on_status(status(rid, 'recovering', goal_index=1, recoveries=1))
+    assert runs.state()['recovering'] and runs.state()['phase'] == 'running'
+    runs.on_status(status(rid, 'running', goal_results=['SUCCEEDED'], recoveries=1))
+    assert runs.state()['goal'] == 1  # hedefler arasında son hedef korunur
+    runs.on_status(status(rid, 'running', goal_index=2, goal_results=['SUCCEEDED'],
+                          recoveries=1))
+    runs.on_status(status(rid, 'finished', goal_results=['SUCCEEDED', 'FAILED'], recoveries=3,
+                          result='FAILED'))
+    runs.on_status(status(rid, 'finished', goal_results=['SUCCEEDED', 'FAILED'], recoveries=3,
+                          result='FAILED'))  # finishing'te artık işlenmez
+    assert events.phases() == ['starting', 'starting', 'running', 'running', 'running',
+                               'running', 'finishing']
+    done.touch()
     assert events.wait_phase('finished')
-    assert events.phases() == ['starting', 'running', 'running', 'running', 'running',
-                               'finishing', 'finished']
     final = runs.state()
     assert final['goal_results'] == ['SUCCEEDED', 'FAILED'] and final['goal_count'] == 2
+    assert final['recoveries'] == 3 and not final['recovering']
     assert final['result'] == 'FAILED' and final['summary']['goals_reached'] == '1'
     assert [e for e, _ in events.items].count('run_finished') == 1
     assert any(d.get('text', '').startswith('Hedef 1/2') for e, d in events.items if e == 'log')
@@ -184,9 +212,10 @@ def test_tek_kosu_kilidi_gazebo_denetimi_ve_durdurma(tmp_path):
                                                  tail='exec sleep 30'))
     with pytest.raises(RunError):
         runs.stop()  # çalışan koşu yok
-    runs.start(1)
+    rid = runs.start(1)['run_id']
     with pytest.raises(RunError, match='Zaten'):
         runs.start(1)
+    runs.on_status(status(rid, 'running', goal_index=1, goal_count=1))
     assert events.wait_phase('running')
     time.sleep(0.5)
     assert runs.stop()['phase'] == 'stopping'

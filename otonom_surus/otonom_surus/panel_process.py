@@ -7,7 +7,7 @@ kapanmazsa bütün gruba SIGTERM ve SIGKILL gider. Böylece yalnızca o koşudan
 ölür, kullanıcının başka oturumlarına dokunulmaz.
 
 RunManager panelden başlatılan senaryo koşusunu yönetir: tek koşu kilidi, komut, aşama, günlük,
-sonuç. Aşama süreçten ve mission_manager'ın günlük satırlarından çıkarılır:
+sonuç. Aşama süreçten ve mission_manager'ın /mission_status iletilerinden (on_status) çıkarılır:
     idle → starting → running → finishing → finished
                     ↘ stopping → stopped          (Durdur)
                     ↘ error                       (launch hata koduyla bitti / sonuç yok)
@@ -33,11 +33,6 @@ NODE_LOG = re.compile(
     r'(?P<msg>.*)$')
 LAUNCH_LOG = re.compile(r'^\[(?P<level>[A-Z]+)\] \[(?P<who>[^\]]+)\]: (?P<msg>.*)$')
 WARN_LEVELS = ('WARN', 'WARNING', 'ERROR', 'FATAL')
-
-# mission_manager'ın görev satırları (mission_manager.py'deki self.info çağrıları)
-GOAL_SENT = re.compile(r'^Hedef (\d+)/(\d+): \(')
-GOAL_DONE = re.compile(r'^Hedef (\d+)/(\d+): ([A-Z]+),')
-MISSION_DONE = re.compile(r'^Görev bitti: ([A-Z]+), (\d+)/(\d+) hedef')
 
 RESULT_FIELDS = ('result', 'goals_reached', 'goal_count', 'duration_s', 'path_length_m',
                  'path_efficiency', 'min_obstacle_dist_m', 'recoveries', 'failure_reason')
@@ -231,8 +226,9 @@ class RunManager:
     """
     Panelden başlatılan senaryo koşusu (aynı anda en çok bir tane).
 
-    publish(event, data) olayları dağıtır: 'run' (aşama değişti), 'log' (günlük satırı),
-    'run_finished' (koşu sonuçlarıyla bitti). command ve gazebo_check testlerde değiştirilir.
+    publish(event, data) olayları dağıtır: 'run' (aşama ya da hedef ilerlemesi değişti), 'log'
+    (günlük satırı), 'run_finished' (koşu sonuçlarıyla bitti). command ve gazebo_check testlerde
+    değiştirilir.
     """
 
     def __init__(self, results_dir, publish, scenarios_file=None, command=scenario_command,
@@ -271,7 +267,8 @@ class RunManager:
             self._state = {
                 'phase': 'starting', 'scenario': scenario, 'run_id': run_id, 'gui': bool(gui),
                 'rviz': bool(rviz), 'command': ' '.join(cmd), 'started': time.time(),
-                'goal': None, 'goal_count': None, 'goal_results': [],
+                'goal': None, 'goal_count': None, 'goal_results': [], 'recoveries': 0,
+                'recovering': False,
             }
             self._stopping = False
             self.log.clear()
@@ -324,38 +321,38 @@ class RunManager:
 
     def _on_line(self, line):
         entry = parse_line(line)
-        if entry is None:
-            return
-        changed = None
-        if entry['source'] == 'mission_manager':
-            changed = self._track(entry['text'])
-        self._add_log(entry)
-        if changed is not None:
-            self.publish('run', changed)
+        if entry is not None:
+            self._add_log(entry)
 
-    def _track(self, text):
-        """mission_manager satırından aşama ve hedef bilgisi; durum değiştiyse yeni durum."""
+    def on_status(self, status):
+        """
+        mission_manager'ın /mission_status iletisi (sözlük): aşama, hedef ve kurtarma ilerlemesi.
+
+        Yalnızca bu koşunun (run_id) iletisi işlenir. Durum değiştiyse 'run' olayı gider; 1 Hz'lik
+        tekrarlar (yalnızca süre ve yol değişir) olay üretmez. Hedefler arasındaki kısa anda
+        (goal_index None) son hedef korunur.
+        """
         with self._lock:
             st = self._state
-            if st['phase'] not in ('starting', 'running'):
-                return None
-            m = GOAL_SENT.match(text)
-            if m:
+            if (st['phase'] not in ('starting', 'running')
+                    or st.get('run_id') != status.get('run_id')):
+                return
+            before = dict(st, goal_results=list(st['goal_results']))
+            mission = status.get('state')
+            if mission in ('running', 'recovering'):
                 st['phase'] = 'running'
-                st['goal'], st['goal_count'] = int(m[1]), int(m[2])
-                return dict(st)
-            m = GOAL_DONE.match(text)
-            if m:
-                results = st['goal_results']
-                results += [None] * (int(m[1]) - len(results))
-                results[int(m[1]) - 1] = m[3]
-                return dict(st)
-            m = MISSION_DONE.match(text)
-            if m:
-                st['phase'] = 'finishing'
-                st['result'] = m[1]
-                return dict(st)
-        return None
+            elif mission == 'finished':
+                st['phase'], st['result'] = 'finishing', status.get('result')
+            if status.get('goal_index') is not None:
+                st['goal'] = status['goal_index']
+            st['goal_count'] = status.get('goal_count')
+            st['goal_results'] = list(status.get('goal_results') or [])
+            st['recoveries'] = status.get('recoveries', 0)
+            st['recovering'] = mission == 'recovering'
+            if st == before:
+                return
+            state = dict(st)
+        self.publish('run', state)
 
     def _on_exit(self, returncode):
         with self._lock:

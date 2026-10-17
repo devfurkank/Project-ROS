@@ -14,9 +14,12 @@ Konular:
     odom                   (nav_msgs/Odometry)  girdi: yol ve yörünge (Gazebo'da dünya gerçeği)
     min_obstacle_distance  (std_msgs/Float32)   girdi: obstacle_detector'dan
     traveled_path          (nav_msgs/Path)      gidilen iz, map çerçevesinde (RViz)
+    mission_status         (std_msgs/String)    görevin durumu, JSON (web paneli); her
+                                                değişimde ve 1 Hz'de, transient_local
 """
 
 import csv
+import json
 import math
 import os
 import subprocess
@@ -30,9 +33,16 @@ from nav_msgs.msg import Odometry, Path
 from otonom_surus.scenarios import load_scenario
 import rclpy
 from rclpy.executors import ExternalShutdownException
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, String
 from tf2_ros import Buffer, TransformException, TransformListener
+
+STATUS_VERSION = 1  # /mission_status şemasının sürümü
+RECOVERY_HOLD = 5.0  # s (sim); kurtarma sayısı artınca durum bu kadar süre 'recovering' kalır
+# Son durum geç bağlanan aboneye de gitsin (panel koşu sürerken açılabilir).
+LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                     durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 RUN_FIELDS = [
     'timestamp', 'scenario', 'run_id', 'result', 'goals_reached', 'goal_count',
@@ -87,6 +97,42 @@ def append_csv(path, fields, row):
         writer.writerow(row)
 
 
+def mission_status(scenario, run_id, results_dir, state, goals, results, now=None, t0=None,
+                   current=None, current_recoveries=0, last_recovery=None, distance=0.0,
+                   min_distance=math.inf):
+    """
+    /mission_status iletisinin içeriği: JSON'a hazır sözlük (sürüm alanlı).
+
+    state: waiting_nav2 | running | finished; çalışırken son RECOVERY_HOLD saniyede kurtarma
+    sayısı arttıysa recovering. goals senaryonun (x, y, yaw[rad]) hedefleri, results biten
+    hedeflerin navigate() satırları, current yürütülen hedefin sırası (1'den; hedefler arasında
+    None), current_recoveries onun şimdiye kadarki kurtarma sayısı. Zamanlar sim zamanı (s); t0
+    kaydın başladığı an, t ondan bu yana geçen süre. Sonsuz değer JSON'da geçersiz olduğundan
+    ölçülmemiş en yakın engel None olur.
+    """
+    if (state == 'running' and last_recovery is not None and now is not None
+            and now - last_recovery < RECOVERY_HOLD):
+        state = 'recovering'
+    status = {
+        'v': STATUS_VERSION, 'mode': 'scenario', 'state': state,
+        'scenario': scenario, 'run_id': run_id, 'results_dir': results_dir,
+        't0': None if t0 is None else round(t0, 3),
+        't': None if t0 is None or now is None else round(now - t0, 2),
+        'goal_index': current, 'goal_count': len(goals), 'goal': None,
+        'goal_results': [r['result'] for r in results],
+        'recoveries': sum(r['recoveries'] for r in results) + current_recoveries,
+        'distance': round(distance, 3),
+        'min_obstacle': round(min_distance, 3) if math.isfinite(min_distance) else None,
+    }
+    if current is not None:
+        x, y, yaw = goals[current - 1]
+        status['goal'] = [x, y, round(math.degrees(yaw), 1)]
+    if state == 'finished':
+        failed = next((r['result'] for r in results if r['result'] != 'SUCCEEDED'), None)
+        status['result'] = failed or 'SUCCEEDED'
+    return status
+
+
 def goal_pose(x, y, yaw, stamp):
     """Hedef pozu: map çerçevesinde (x, y) konumu ve yaw yönü."""
     pose = PoseStamped()
@@ -121,11 +167,32 @@ class MissionManager(BasicNavigator):
         self.map_track = PathRecorder(0.05)  # RViz izi: robotun SLAM'daki konumu
         self.min_distance = math.inf
         self.t0 = 0.0
+        # /mission_status için görevin durumu
+        self.state = 'waiting_nav2'
+        self.goals = []
+        self.results = []  # biten hedeflerin satırları
+        self.current = None  # yürütülen hedefin sırası (1'den)
+        self.current_recoveries = 0
+        self.last_recovery = None  # kurtarma sayısının son arttığı sim zamanı
+        self.t_end = None
 
         self.create_subscription(Odometry, 'odom', self.on_odom, 10)
         self.create_subscription(Float32, 'min_obstacle_distance', self.on_distance, 10)
         self.path_pub = self.create_publisher(Path, 'traveled_path', 10)
+        self.status_pub = self.create_publisher(String, 'mission_status', LATCHED)
         self.create_timer(0.2, self.update_traveled_path)
+        self.create_timer(1.0, self.publish_status)
+
+    def publish_status(self):
+        """Görevin durumunu /mission_status'a JSON olarak yayınlar (web paneli için)."""
+        started = self.state != 'waiting_nav2'
+        status = mission_status(
+            self.scenario, self.run_id, self.results_dir, self.state, self.goals, self.results,
+            now=self.t_end if self.t_end is not None else self.sim_time(),
+            t0=self.t0 if started else None, current=self.current,
+            current_recoveries=self.current_recoveries, last_recovery=self.last_recovery,
+            distance=self.odom_track.length, min_distance=self.min_distance)
+        self.status_pub.publish(String(data=json.dumps(status, ensure_ascii=False)))
 
     def sim_time(self):
         """Saniye cinsinden sim zamanı (use_sim_time ile /clock)."""
@@ -217,11 +284,16 @@ class MissionManager(BasicNavigator):
         self.feedback = None
         recoveries = 0
         result = None
+        self.current, self.current_recoveries = index, 0
+        self.publish_status()
         if not self.goToPose(goal_pose(x, y, yaw, self.get_clock().now().to_msg())):
             result = 'REJECTED'
         while result is None and not self.isTaskComplete():
             if self.feedback is not None:
                 recoveries = max(recoveries, self.feedback.number_of_recoveries)
+            if recoveries > self.current_recoveries:
+                self.current_recoveries, self.last_recovery = recoveries, self.sim_time()
+                self.publish_status()
             if self.sim_time() - start > self.goal_timeout:
                 self.warn(f'Hedef {index}: {self.goal_timeout:.0f} s içinde varılamadı, '
                           'iptal ediliyor')
@@ -249,9 +321,10 @@ class MissionManager(BasicNavigator):
     def run(self):
         """Görevi baştan sona yürütür ve sonuçları yazar."""
         scenario = load_scenario(self.scenarios_file, self.scenario)
-        goals = scenario['goals']
+        goals = self.goals = scenario['goals']
         self.info(f'Senaryo {self.scenario} ({scenario["name"]}), koşu {self.run_id}: '
                   f'{len(goals)} hedef; sonuçlar {self.results_dir}')
+        self.publish_status()  # waiting_nav2
 
         # T3: varsayılan localizer='amcl' SLAM modunda sonsuza kadar bekler (AMCL yok;
         # slam_toolbox Humble'da lifecycle düğümü değil).
@@ -262,13 +335,19 @@ class MissionManager(BasicNavigator):
         self.t0, wall_start = self.sim_time(), time.monotonic()
         self.odom_track.add(0.0, *start_xy)
         self.recording = True
-        results = []
+        self.state = 'running'
+        results = self.results
         for i, (x, y, yaw) in enumerate(goals, 1):
             results.append(self.navigate(i, len(goals), x, y, yaw))
+            self.current, self.current_recoveries = None, 0  # artık results'ta sayılıyor
+            self.publish_status()
             if results[-1]['result'] != 'SUCCEEDED' and self.stop_on_failure:
                 break
         self.recording = False
+        self.t_end = self.sim_time()
         self.write_results(goals, results, start_xy, time.monotonic() - wall_start)
+        self.state = 'finished'
+        self.publish_status()
         self.save_map()
 
     def write_results(self, goals, results, start_xy, wall_duration):
