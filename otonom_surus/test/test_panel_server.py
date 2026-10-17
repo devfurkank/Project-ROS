@@ -5,7 +5,9 @@ import json
 import os
 import threading
 
-from otonom_surus.panel_server import Broadcaster, make_server, resolve_static, sse_event
+from otonom_surus.panel_runs import RUN_FIELDS, RunIndex
+from otonom_surus.panel_server import (
+    Broadcaster, make_server, resolve_static, runs_route, sse_event)
 import pytest
 
 
@@ -70,11 +72,12 @@ def test_dolu_kuyrukta_en_eski_olay_duser():
 
 
 class FakePanel:
-    """PanelServer'ın HTTP tarafının kullandığı arayüz, ROS'suz."""
+    """PanelServer'ın HTTP tarafının kullandığı arayüz, ROS'suz; koşu dizini gerçek."""
 
-    def __init__(self, web_dir):
+    def __init__(self, web_dir, index):
         self.web_dir = web_dir
         self.broadcaster = Broadcaster()
+        self.index = index
 
     def hello(self):
         return {'ok': True, 'version': 'test', 'clients': self.broadcaster.count()}
@@ -82,8 +85,10 @@ class FakePanel:
     def api(self, method, path, body):
         if method == 'GET' and path == '/api/health':
             return 200, self.hello()
-        if method == 'POST' and path == '/api/echo':
-            return 201, body
+        if path == '/api/echo':  # POST'ta gövde, GET'te sorgu parametreleri
+            return (201 if method == 'POST' else 200), body
+        if method == 'GET':
+            return runs_route(self.index, path, body)
         return None
 
     def log_request(self, client, text):
@@ -97,7 +102,16 @@ def server(tmp_path):
     (web / 'index.html').write_text('<!doctype html><title>Panel</title>', encoding='utf-8')
     (web / 'app.js').write_text('// istemci', encoding='utf-8')
     (tmp_path / 'gizli.txt').write_text('gizli')
-    srv = make_server(FakePanel(str(web)), '127.0.0.1', 0)
+    runs = tmp_path / 'results' / 'alt'
+    (runs / 'trajectories').mkdir(parents=True)
+    (runs / 'runs.csv').write_text(
+        ','.join(RUN_FIELDS) + '\n'
+        '2026-10-15T14:17:29,1,r1,SUCCEEDED,1,1,28.1,28.2,5.7,5.6,0.98,0.3,0,\n'
+        '2026-10-15T14:20:00,2,r2,FAILED,0,3,9.0,9.1,1.0,12.0,,0.3,2,"hedef 1: FAILED, kala"\n',
+        encoding='utf-8')
+    (runs / 'trajectories' / 's1_r1.csv').write_text(
+        't,x,y\n0.0,0.0,0.0\n0.5,0.1,0.0\n1.0,0.2,0.0\n1.5,0.3,0.0\n')
+    srv = make_server(FakePanel(str(web), RunIndex(str(tmp_path / 'results'))), '127.0.0.1', 0)
     thread = threading.Thread(target=srv.serve_forever, kwargs={'poll_interval': 0.05})
     thread.start()
     yield srv
@@ -148,6 +162,40 @@ def test_http_post_govdesi(server):
         r = request(server, 'POST', '/api/echo', bad)
         assert r.status == 400, bad
         assert 'error' in json.loads(r.read())
+
+
+def test_http_get_sorgu_parametreleri(server):
+    query = 'world=senaryo2.world&dt=0.5&dt=1&ad=%C3%87a%C4%9Fr%C4%B1'
+    r = request(server, 'GET', '/api/echo?' + query)
+    assert json.loads(r.read()) == {'world': 'senaryo2.world', 'dt': '1', 'ad': 'Çağrı'}
+
+
+def body(response, status=200):
+    assert response.status == status
+    return json.loads(response.read())
+
+
+def test_kosu_dizini_uclari(server):
+    d = body(request(server, 'GET', '/api/runs'))
+    assert d['root'].endswith('results') and d['warnings'] == []
+    assert [r['id'] for r in d['runs']] == ['alt/s2_r2', 'alt/s1_r1']
+    assert d['runs'][0]['failure_reason'] == 'hedef 1: FAILED, kala'
+    assert body(request(server, 'GET', '/api/runs?world=yok.world'))['runs'] == []
+    assert body(request(server, 'GET', '/api/runs/alt/s1_r1'))['duration_s'] == 28.1
+
+    # Kimlikteki '/' yüzde kodlu da gelebilir.
+    d = body(request(server, 'GET', '/api/runs/alt%2Fs1_r1/trajectory'))
+    assert d['id'] == 'alt/s1_r1' and len(d['pts']) == 4
+    d = body(request(server, 'GET', '/api/runs/alt/s1_r1/trajectory?dt=1'))
+    assert [p[0] for p in d['pts']] == [0.0, 1.0, 1.5]
+    r = request(server, 'GET', '/api/runs/alt/s1_r1/trajectory?dt=x')
+    assert 'dt' in body(r, 400)['error']
+
+    assert 'yörünge kaydı yok' in body(
+        request(server, 'GET', '/api/runs/alt/s2_r2/trajectory'), 404)['error']
+    for path in ('/api/runs/alt/s9_yok', '/api/runs/../gizli.txt/trajectory',
+                 '/api/runs/alt/../../gizli.txt'):
+        assert 'bulunamadı' in body(request(server, 'GET', path), 404)['error'], path
 
 
 def test_sse_hello_olay_ve_kapanis(server):

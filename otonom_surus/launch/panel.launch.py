@@ -3,7 +3,9 @@ Web kontrol panelini açar: tarayıcıda http://localhost:<port>.
 
 Yalnızca panel_server'ı başlatır; simülasyonu panel kendisi alt süreç olarak başlatır ve kapatır.
 Panelin koşuları results_dir'e yazılır (varsayılan results/panel, git dışı): Faz 8'in deney
-verisine (results/runs.csv) karışmaz.
+verisine (results/runs.csv) karışmaz. "Geçmiş koşular" runs_root'u ve onun bir alt düzeyini
+tarar (varsayılan results_dir'in üst klasörü, yani results/); bu yüzden komut deponun kökünden
+çalıştırılmalı.
 
 Kullanım:
     ros2 launch otonom_surus panel.launch.py
@@ -25,6 +27,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'results_dir', default_value='results/panel',
             description='Panel koşularının klasörü; göreli ise komutun çalıştırıldığı yere göre'),
+        DeclareLaunchArgument(
+            'runs_root', default_value='',
+            description="Geçmiş koşuların kökü; boşsa results_dir'in üst klasörü (results/)"),
         # Türler açıkça veriliyor (T16): launch_ros değerleri YAML olarak ayrıştırır.
         # sigterm_timeout: Ctrl+C'de panel önce çalışan koşuyu durdurur (en kötü 30 + 10 + 5 s);
         # launch'ın varsayılan 5 s'si dolup SIGTERM göndermesin.
@@ -34,5 +39,6 @@ def generate_launch_description():
             parameters=[{
                 'port': ParameterValue(arg('port'), value_type=int),
                 'results_dir': ParameterValue(arg('results_dir'), value_type=str),
+                'runs_root': ParameterValue(arg('runs_root'), value_type=str),
             }]),
     ])

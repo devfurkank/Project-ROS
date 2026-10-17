@@ -1,6 +1,7 @@
 // Otonom sürüş paneli istemcisi.
 // P1: bağlantı göstergesi, mod seçici. P2: dünya kartları, görev seçimi, başlat/durdur, koşu kartı.
 // P3: canlı harita (SLAM, robot, iz, Nav2 planı, hareketli kutular), görev durumu ve metrikler.
+// P4: geçmiş koşular tablosu (koşu dizini), seçili koşunun yörüngesi (tekrar oynatmanın temeli).
 // Sunucuyla iki yol: /api/stream (SSE, sunucu -> tarayıcı) ve /api/... (JSON istekleri).
 'use strict';
 
@@ -11,13 +12,17 @@ const MODES = {
     hint: 'Önizleme: seçili dünya, görevin hedefleri ve robotun doğduğu nokta. Başlatınca SLAM ' +
       'haritası, robot, izlenen yol ve Nav2 planı canlı çizilir.'},
   replay: {title: 'Tekrar oynatma', empty: 'Koşu seçilmedi',
-    hint: 'Koşu seçici ve hayalet robotlar P4–P5’te gelecek.'},
+    hint: 'Aşağıdaki “Geçmiş koşular” tablosundan bir koşu seç; kaydedilmiş yörüngesi burada ' +
+      'çizilir. Oynatıcı, çoklu seçim ve zaman çizelgesi P5’te gelecek.'},
   edit: {title: 'Dünya tasarla', empty: 'Tasarlayıcı yakında',
     hint: 'Dünya tasarlayıcı P9’da gelecek.'},
 };
 const LIVE_HINT = 'Canlı: SLAM haritası (/map; sisli alan henüz görülmedi), robot (TF map → ' +
   'base_footprint), izlenen yol ve kesikli Nav2 planı. İnce çizgiler dünyanın gerçek geometrisi; ' +
   'SLAM haritasıyla arasındaki fark haritalama hatasıdır.';
+const REPLAY_HINT = 'Kaydedilmiş yörünge (/odom, dünya koordinatı), hedeflerin sonuçları, ' +
+  'başlangıç ve son konum. Hareketli kutuların konum kaydı yok: doğdukları yer ve şeritleri ' +
+  'çiziliyor. Oynatıcı ve çoklu seçim P5’te.';
 // Koşu aşamaları: [rozet metni, rozet rengi]. watching/watched: panel dışından başlatılmış görev.
 const PHASES = {
   idle: ['Hazır', 'neutral'],
@@ -37,6 +42,7 @@ const STALE_MS = 10000;  // bu kadar süre veri gelmezse bağlantı kopmuş say�
 const HEALTH_MS = 10000;  // sunucu bilgisinin yenilenme aralığı
 const POSE_STALE_MS = 3000;  // bu kadar süre konum gelmezse anlık metrikler '–'
 const EXTERNAL_STALE_MS = 5000;  // panel dışı görevin durumu bu kadar gelmezse izleme biter
+const FRESH_MS = 120000;  // bu kadar süre önce yazılmış koşu tabloda "az önce" diye işaretlenir
 const LOG_LINES = 80;
 const LEGENDS = {
   preview: [['dot', '--map-robot', 'Robot (doğduğu yer)'], ['ring', '--map-goal', 'Hedef'],
@@ -47,6 +53,11 @@ const LEGENDS = {
     ['ring', '--map-ok', 'Varıldı'], ['ring', '--map-bad', 'Başarısız'],
     ['box', '--map-slam', 'SLAM: dolu'], ['box', '--map-fog', 'Henüz görülmedi'],
     ['outline', '--map-wall', 'Gerçek geometri'], ['box', '--map-moving', 'Hareketli kutu']],
+  replay: [['dot', '--map-robot', 'Robot (son konum)'], ['ring', '--map-robot', 'Başlangıç'],
+    ['line', '--map-path', 'İzlenen yol'], ['ring', '--map-goal', 'Hedef'],
+    ['ring', '--map-ok', 'Varıldı'], ['ring', '--map-bad', 'Başarısız'],
+    ['box', '--map-wall', 'Duvar'], ['box', '--map-obstacle', 'Engel'],
+    ['dash', '--map-moving', 'Hareketli kutunun şeridi']],
 };
 
 const state = {
@@ -64,6 +75,16 @@ const state = {
   busy: false,  // başlat/durdur isteği yolda
   live: emptyLive(),
   legendKey: '',
+  // Geçmiş koşular (/api/runs, en yeni önce). freshId: bu sekmede az önce biten koşu.
+  runs: [],
+  runsRoot: '',
+  runsWarnings: [],
+  runsError: '',
+  runsLoaded: false,
+  freshId: null,
+  filter: {world: '', result: ''},
+  // Tekrar oynatma: seçili koşu ve yörünge önbelleği (kimlik -> [[t, x, y], ...]).
+  replay: {id: null, traj: {}, errors: {}, pending: {}},
 };
 
 // Canlı verinin önbelleği; yeni koşu başlarken boşaltılır. scenario: verinin ait olduğu senaryo.
@@ -208,10 +229,21 @@ function connect() {
     applyRun(hello.run || {phase: 'idle'}, true);
     applyLive(hello.live);
     if (!state.scenarios.length) loadCatalog();
+    loadRuns();  // sunucu yeniden başlamış olabilir
   });
   on('ping', () => {});
   on('run', (run) => applyRun(run));
   on('log', (entry) => addLog(entry));
+  // Biten görev listeye düşer: runs_changed /mission_status 'finished' gelince (panel dışı
+  // görevde de), run_finished panelin koşusunun launch'ı kapanınca (harita da yazılmıştır).
+  on('runs_changed', (d) => {
+    if (d.id) state.freshId = d.id;
+    loadRuns();
+  });
+  on('run_finished', (run) => {
+    if (run.index_id) state.freshId = run.index_id;
+    loadRuns();
+  });
   on('status', setStatus);
   on('pose', setPose);
   on('map', setMap);
@@ -263,6 +295,8 @@ async function loadCatalog() {
     renderControls();
     renderRun();
     renderMetrics();
+    renderRuns();  // senaryo adları ve dünya kartlarının adları artık biliniyor
+    renderReplay();
     drawMap();
   } catch (e) {
     $('err').textContent = `Dünyalar ya da senaryolar yüklenemedi: ${e.message}`;
@@ -673,6 +707,316 @@ function renderMetrics() {
   setMetric('mRec', st ? String(st.recoveries) : '–', '', st && st.state === 'recovering' ? 'warn' : '');
 }
 
+// --- Geçmiş koşular ------------------------------------------------------------------------
+
+let runsSeq = 0;  // üst üste gelen isteklerde yalnızca sonuncunun yanıtı uygulanır
+async function loadRuns() {
+  const seq = ++runsSeq;
+  try {
+    const d = await getJson('/api/runs');
+    if (seq !== runsSeq) return;
+    state.runs = d.runs;
+    state.runsRoot = d.root;
+    state.runsWarnings = d.warnings || [];
+    state.runsError = '';
+    state.runsLoaded = true;
+  } catch (e) {
+    if (seq !== runsSeq) return;
+    state.runsError = `Koşu listesi yüklenemedi: ${e.message}`;
+  }
+  renderRuns();
+  renderReplay();
+  redraw();
+}
+
+function isSuccess(run) {
+  return run.result === 'SUCCEEDED';
+}
+
+function runName(run) {
+  const s = scenarioById(run.scenario);
+  return run.scenario_name || (s ? s.name : `Senaryo ${run.scenario}`);
+}
+
+// "Az önce": bu sekmede biten son koşu ya da son iki dakikada yazılmış koşu (sayfa yenilense de).
+function isFresh(run) {
+  const age = Date.now() - new Date(run.timestamp).getTime();
+  return run.id === state.freshId || (age >= 0 && age < FRESH_MS);
+}
+
+function fixed(v, digits, unit) {
+  return v === null || v === undefined ? '–' : `${v.toFixed(digits)}${unit}`;
+}
+
+function shortDate(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '–';
+  const now = new Date();
+  const hm = d.toLocaleTimeString('tr-TR', {hour: '2-digit', minute: '2-digit', hour12: false});
+  if (d.toDateString() === now.toDateString()) return `bugün ${hm}`;
+  const opts = {day: '2-digit', month: '2-digit'};
+  if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
+  return `${d.toLocaleDateString('tr-TR', opts)} ${hm}`;
+}
+
+// Dünya süzgeci: koşusu olan dünyalar, katalogdaki sırayla ve kart adlarıyla, koşu sayılarıyla.
+// Kaydedilmiş seçimin koşusu (henüz) yoksa "Hepsi" gösterilir ama seçim unutulmaz.
+function renderWorldFilter() {
+  const sel = $('fWorld');
+  const counts = new Map();
+  state.runs.forEach((r) => counts.set(r.world || '?', (counts.get(r.world || '?') || 0) + 1));
+  const titles = new Map(worldGroups().map((g) => [g.file, g.title]));
+  const files = [...new Set([...titles.keys(), ...counts.keys()])].filter((f) => counts.has(f));
+  sel.textContent = '';
+  sel.appendChild(new Option(`Hepsi (${state.runs.length})`, ''));
+  files.forEach((f) => {
+    const name = f === '?' ? 'Bilinmeyen dünya' : titles.get(f) || f;
+    sel.appendChild(new Option(`${name} (${counts.get(f)})`, f));
+  });
+  sel.value = counts.has(state.filter.world) ? state.filter.world : '';
+}
+
+function renderRuns() {
+  renderWorldFilter();
+  $('fResult').value = state.filter.result;
+  const world = $('fWorld').value;
+  const result = $('fResult').value;
+  const rows = state.runs.filter((r) => (!world || (r.world || '?') === world) &&
+    (!result || (result === 'ok') === isSuccess(r)));
+  const body = $('runRows');
+  body.textContent = '';
+  rows.forEach((run) => body.appendChild(runRow(run)));
+
+  const ok = rows.filter(isSuccess).length;
+  const total = rows.length !== state.runs.length ? ` · toplam ${state.runs.length}` : '';
+  $('histCount').textContent = state.runsLoaded ? `${rows.length} koşu · ${ok} başarılı${total}` : '';
+  $('histRoot').textContent = state.runsRoot;
+  $('histRoot').title = 'Taranan klasör: kendisi ve bir alt düzeyi (runs.csv olanlar)';
+  let msg = state.runsError || state.runsWarnings.join(' · ');
+  if (!msg && !state.runsLoaded) msg = 'Yükleniyor…';
+  else if (!msg && !state.runs.length) msg = `Koşu bulunamadı: ${state.runsRoot} ve alt klasörleri.`;
+  else if (!msg && !rows.length) msg = 'Süzgece uyan koşu yok.';
+  $('histMsg').textContent = msg;
+}
+
+function runRow(run) {
+  const tr = el('tr');
+  tr.tabIndex = 0;
+  tr.dataset.id = run.id;
+  tr.title = `${run.id} · tekrar oynatmada aç`;
+  const date = el('td', 'c-date', shortDate(run.timestamp));
+  date.title = run.timestamp || '';
+  tr.appendChild(date);
+  tr.appendChild(el('td', 'scn', `S${run.scenario}`));
+  const task = el('td', 'task', runName(run));
+  if (isFresh(run)) task.appendChild(el('span', 'pill', 'az önce'));
+  if (!run.files.trajectory) task.appendChild(el('span', 'pill warn', 'yörünge yok'));
+  tr.appendChild(task);
+  tr.appendChild(el('td', 'c-var', run.label));
+  // Sonuç rengin yanında metinle de: başarısızda sonuç adı yazılır.
+  const reached = run.goal_count !== null ? `${run.goals_reached}/${run.goal_count}` : '';
+  tr.appendChild(el('td', isSuccess(run) ? 'ok' : 'bad',
+    isSuccess(run) ? reached : `${reached} ${run.result || 'sonuç yok'}`.trim()));
+  tr.appendChild(el('td', 'num', fixed(run.duration_s, 1, ' s')));
+  tr.appendChild(el('td', 'num c-path', fixed(run.path_length_m, 2, ' m')));
+  tr.appendChild(el('td', 'num c-eff', fixed(run.path_efficiency, 2, '')));
+  markRow(tr);
+  tr.addEventListener('click', () => openRun(run.id));
+  tr.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openRun(run.id);
+    }
+  });
+  return tr;
+}
+
+function markRow(tr) {
+  const on = tr.dataset.id === state.replay.id;
+  tr.classList.toggle('on', on);
+  tr.setAttribute('aria-selected', String(on));
+}
+
+// Satıra tıklayınca koşu tekrar oynatmada açılır; harita görünür olsun diye sayfa ona kayar.
+function openRun(id) {
+  state.replay.id = id;
+  store('panel.replay', id);
+  document.querySelectorAll('#runRows tr').forEach(markRow);
+  if (state.mode !== 'replay') setMode('replay');
+  else {
+    renderReplay();
+    redraw();
+  }
+  document.querySelector('.mapcard').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+// --- Tekrar oynatma (P4: seçili koşunun yörüngesi; oynatıcı ve çoklu seçim P5'te) -----------
+
+function selectedRun() {
+  return state.runs.find((r) => r.id === state.replay.id) || null;
+}
+
+function runPath(id) {
+  return id.split('/').map(encodeURIComponent).join('/');
+}
+
+async function loadTrajectory(run) {
+  const R = state.replay;
+  if (R.traj[run.id] || R.errors[run.id] || R.pending[run.id]) return;
+  if (!run.files.trajectory) {
+    R.errors[run.id] = 'Yörünge kaydı yok';
+    return;
+  }
+  R.pending[run.id] = true;
+  try {
+    R.traj[run.id] = (await getJson(`/api/runs/${runPath(run.id)}/trajectory`)).pts;
+  } catch (e) {
+    R.errors[run.id] = e.message;
+  } finally {
+    delete R.pending[run.id];
+  }
+  if (R.id === run.id) {
+    renderReplay();
+    redraw();
+  }
+}
+
+// Koşunun hedefleri: konum goals.csv'den (yoksa senaryodan), sonuç goals.csv'den.
+function runGoals(run) {
+  const s = scenarioById(run.scenario);
+  const n = run.goal_count || run.goals.length || (s ? s.goals.length : 0);
+  const goals = [];
+  const results = [];
+  for (let i = 0; i < n; i++) {
+    const g = run.goals.find((x) => x.index === i + 1);
+    const d = s ? s.goals[i] : null;
+    if (g && g.x !== null && g.y !== null) goals.push([g.x, g.y, g.yaw || 0]);
+    else if (d) goals.push(d);
+    else continue;
+    results.push(g ? g.result : null);
+  }
+  return {goals, results};
+}
+
+function renderReplay() {
+  const run = selectedRun();
+  const badge = $('rpBadge');
+  const bars = $('rpBars');
+  const sum = $('rpSummary');
+  bars.textContent = '';
+  sum.textContent = '';
+  if (!run) {
+    const missing = Boolean(state.replay.id) && state.runsLoaded;
+    badge.textContent = missing ? 'Bulunamadı' : 'Koşu seçilmedi';
+    badge.className = 'badge neutral';
+    $('rpScn').textContent = '';
+    $('rpLine').textContent = missing ? `${state.replay.id} listede yok`
+      : 'Geçmiş koşular tablosundan bir koşu seç';
+    $('rpMsg').textContent = '';
+    return;
+  }
+  if (state.mode === 'replay') loadTrajectory(run);
+  const ok = isSuccess(run);
+  badge.textContent = ok ? 'Başarılı' : run.result || 'Sonuç yok';
+  badge.className = 'badge ' + (ok ? 'ok' : 'bad');
+  $('rpScn').textContent = `S${run.scenario} · ${run.label}`;
+  $('rpLine').textContent = runName(run);
+  runGoals(run).results.forEach((r) => {
+    bars.appendChild(el('span', r === 'SUCCEEDED' ? 'ok' : r ? 'bad' : ''));
+  });
+  const rows = [
+    ['Hedef', run.goal_count !== null ? `${run.goals_reached}/${run.goal_count}` : '–'],
+    ['Süre (sim)', fixed(run.duration_s, 1, ' s')], ['Yol', fixed(run.path_length_m, 2, ' m')],
+    ['Verim', fixed(run.path_efficiency, 2, '')],
+    ['En yakın engel', fixed(run.min_obstacle_dist_m, 2, ' m')],
+    ['Kurtarma', run.recoveries === null ? '–' : String(run.recoveries)],
+  ];
+  if (run.failure_reason) rows.push(['Neden', run.failure_reason]);
+  rows.push(['Tarih', run.timestamp ? run.timestamp.replace('T', ' ') : '–'], ['Kimlik', run.id]);
+  rows.forEach(([k, v]) => {
+    sum.appendChild(el('dt', '', k));
+    sum.appendChild(el('dd', '', v));
+  });
+  const R = state.replay;
+  const kinds = [['trajectory', 'yörünge'], ['map', 'harita'], ['log', 'günlük'],
+    ['events', 'olay'], ['obstacles', 'engel'], ['replay', 'ayrıntılı']];
+  const have = kinds.filter(([k]) => run.files[k]).map(([, text]) => text);
+  let msg = `Kayıt: ${have.length ? have.join(', ') : 'yok'}`;
+  if (R.errors[run.id]) msg += ` · ${R.errors[run.id]}`;
+  else if (R.pending[run.id]) msg += ' · yörünge yükleniyor…';
+  else if (R.traj[run.id]) msg += ` · ${R.traj[run.id].length} nokta`;
+  $('rpMsg').textContent = msg;
+}
+
+// Hareket yönü: son anlamlı hareketten (2 cm'den kısa adımlar atlanır); hareket yoksa null.
+function heading(pts, i) {
+  const [, x, y] = pts[i];
+  for (let j = i - 1; j >= 0; j--) {
+    const dx = x - pts[j][1];
+    const dy = y - pts[j][2];
+    if (dx * dx + dy * dy >= 0.02 * 0.02) return Math.atan2(dy, dx);
+  }
+  return null;
+}
+
+// Dünyası bilinmeyen koşuda sınır kutusu yörüngeden ve hedeflerden.
+function extentOf(pts, goals) {
+  const xs = [];
+  const ys = [];
+  (pts || []).forEach((p) => {
+    xs.push(p[1]);
+    ys.push(p[2]);
+  });
+  goals.forEach((g) => {
+    xs.push(g[0]);
+    ys.push(g[1]);
+  });
+  if (!xs.length) return null;
+  return [Math.min(...xs) - 0.5, Math.min(...ys) - 0.5, Math.max(...xs) + 0.5, Math.max(...ys) + 0.5];
+}
+
+// Seçili koşu: dünya, hareketli kutuların şeritleri, yörünge, hedefler (sonuç renkleriyle),
+// başlangıç halkası ve son konumdaki robot. Çizilecek bir şey yoksa null.
+function drawReplay(cv, run) {
+  const bg = cssVar('--surface-1');
+  if (!run) return setupCanvas(cv, null, bg);
+  const R = state.replay;
+  const pts = R.traj[run.id] || null;
+  const geometry = run.world ? state.worlds[run.world] : null;
+  const s = scenarioById(run.scenario);
+  const {goals, results} = runGoals(run);
+  const bounds = geometry ? geometry.bounds : extentOf(pts, goals);
+  const T = setupCanvas(cv, bounds, bg);
+  if (!T) return null;
+  drawGrid(T, bounds);
+  if (geometry) {
+    drawShapes(T, geometry, false, null);
+    if (s) drawLanes(T, geometry, s);  // konum kaydı yok (P8): şerit
+  }
+  if (pts) drawLine(T, pts.map((p) => [p[1], p[2]]), cssVar('--map-path'), 2.5);
+  drawGoals(T, goals, results, null, true);
+  T.coord = R.errors[run.id] || '';
+  if (pts && pts.length) {
+    drawStart(T, pts[0][1], pts[0][2]);
+    const last = pts.length - 1;
+    const [t, x, y] = pts[last];
+    drawRobot(T, [x, y, heading(pts, last)], true);
+    T.coord = `son konum x ${x.toFixed(2)} · y ${y.toFixed(2)} · t ${t.toFixed(1)} s`;
+  }
+  return T;
+}
+
+function drawStart(T, px, py) {
+  const x = T.x;
+  x.save();
+  x.strokeStyle = cssVar('--map-robot');
+  x.lineWidth = 1.5;
+  x.beginPath();
+  x.arc(T.X(px), T.Y(py), Math.max(0.105 * T.k, 5), 0, 2 * Math.PI);
+  x.stroke();
+  x.restore();
+}
+
 // --- Harita --------------------------------------------------------------------------------
 
 // Tuvali boyutlandırır (yalnızca değiştiyse), zemini boyar ve dünya -> piksel dönüşümünü kurar.
@@ -881,24 +1225,44 @@ function drawRobot(T, [px, py, th], detailed) {
 
 function drawMap() {
   const cv = $('map');
-  const s = scenarioById(state.scenario);
-  const geometry = state.mode === 'live' && s ? state.worlds[baseName(s.world)] : null;
-  const live = geometry && liveShown() ? state.live : null;
-  const view = drawWorld(cv, geometry, s, true, live);
-  if (!view) {
-    const x = cv.getContext('2d');
-    x.fillStyle = cssVar('--text-secondary');
-    x.font = `14px ${getComputedStyle(document.body).fontFamily}`;
-    x.textAlign = 'center';
-    x.textBaseline = 'middle';
-    x.fillText(MODES[state.mode].empty, cv.clientWidth / 2, cv.clientHeight / 2);
-    x.textAlign = 'start';
-    x.textBaseline = 'alphabetic';
+  let view;
+  let kind = 'none';
+  let coord = '';
+  if (state.mode === 'replay') {
+    view = drawReplay(cv, selectedRun());
+    if (view) {
+      kind = 'replay';
+      coord = view.coord;
+    }
+  } else {
+    const s = state.mode === 'live' ? scenarioById(state.scenario) : null;
+    const geometry = s ? state.worlds[baseName(s.world)] : null;
+    const live = geometry && liveShown() ? state.live : null;
+    view = drawWorld(cv, geometry, s, true, live);
+    if (view) kind = live ? 'live' : 'preview';
+    const p = live && live.pose;
+    if (p) coord = `x ${p.x.toFixed(2)} · y ${p.y.toFixed(2)} · θ ${Math.round(p.th * 180 / Math.PI)}°`;
   }
-  renderMapInfo(view ? (live ? 'live' : 'preview') : 'none');
-  const p = live && live.pose;
-  $('coord').textContent = p
-    ? `x ${p.x.toFixed(2)} · y ${p.y.toFixed(2)} · θ ${Math.round(p.th * 180 / Math.PI)}°` : '';
+  if (!view) drawEmpty(cv, emptyText());
+  renderMapInfo(kind);
+  $('coord').textContent = coord;
+}
+
+function emptyText() {
+  const run = state.mode === 'replay' ? selectedRun() : null;
+  if (!run) return MODES[state.mode].empty;
+  return state.replay.errors[run.id] || 'Yörünge yükleniyor…';
+}
+
+function drawEmpty(cv, text) {
+  const x = cv.getContext('2d');
+  x.fillStyle = cssVar('--text-secondary');
+  x.font = `14px ${getComputedStyle(document.body).fontFamily}`;
+  x.textAlign = 'center';
+  x.textBaseline = 'middle';
+  x.fillText(text, cv.clientWidth / 2, cv.clientHeight / 2);
+  x.textAlign = 'start';
+  x.textBaseline = 'alphabetic';
 }
 
 // Çizim isteklerini ekran tazelemesine toplar (konum 10 Hz gelir, harita en çok bir kez çizilir).
@@ -912,11 +1276,12 @@ function redraw() {
   });
 }
 
-// Lejant ve açıklama haritanın türüne göre (önizleme / canlı); yalnızca tür değişince kurulur.
+// Lejant ve açıklama haritanın türüne göre (önizleme / canlı / tekrar oynatma); yalnızca tür
+// değişince kurulur.
 function renderMapInfo(key) {
   if (key === state.legendKey) return;
   state.legendKey = key;
-  $('hint').textContent = key === 'live' ? LIVE_HINT : MODES[state.mode].hint;
+  $('hint').textContent = {live: LIVE_HINT, replay: REPLAY_HINT}[key] || MODES[state.mode].hint;
   const box = $('legend');
   box.textContent = '';
   box.style.display = key === 'none' ? 'none' : '';
@@ -947,10 +1312,16 @@ function setMode(mode) {
     b.classList.toggle('on', on);
     b.setAttribute('aria-pressed', String(on));
   });
+  const replay = mode === 'replay';
   $('liveTop').style.display = mode === 'live' ? '' : 'none';
+  $('runCard').style.display = replay ? 'none' : '';
+  $('metrics').style.display = replay ? 'none' : '';
+  $('replayCard').style.display = replay ? '' : 'none';
+  $('history').style.display = mode === 'edit' ? 'none' : '';
   $('mapTitle').textContent = MODES[mode].title;
   state.legendKey = '';  // açıklama yeni moda göre yeniden yazılsın
   store('panel.mode', mode);
+  if (replay) renderReplay();  // seçili koşunun yörüngesi gerekirse yüklenir
   drawMap();
   renderMetrics();
   if (mode === 'live') drawPreviews();  // gizliyken çizilen önizlemeler boş kalır
@@ -971,6 +1342,20 @@ $('go').addEventListener('click', startRun);
 $('stop').addEventListener('click', stopRun);
 $('gz').addEventListener('change', renderCommand);
 $('rv').addEventListener('change', renderCommand);
+$('fWorld').addEventListener('change', () => {
+  state.filter.world = $('fWorld').value;
+  store('panel.runs.world', state.filter.world);
+  renderRuns();
+});
+$('fResult').addEventListener('change', () => {
+  state.filter.result = $('fResult').value;
+  store('panel.runs.result', state.filter.result);
+  renderRuns();
+});
+$('histReload').addEventListener('click', () => {
+  state.replay.errors = {};  // okunamayan yörüngeler yeniden denensin
+  loadRuns();
+});
 new ResizeObserver(() => {
   drawMap();
   drawPreviews();
@@ -992,9 +1377,13 @@ setInterval(() => {
 }, 1000);
 setInterval(refreshHealth, HEALTH_MS);
 
+state.filter.world = restore('panel.runs.world') || '';
+state.filter.result = ['ok', 'bad'].includes(restore('panel.runs.result')) ? restore('panel.runs.result') : '';
+state.replay.id = restore('panel.replay');
 renderRun();
 renderControls();
 renderMetrics();
+renderRuns();
 const savedMode = restore('panel.mode');
 setMode(MODES[savedMode] ? savedMode : 'live');
 connect();

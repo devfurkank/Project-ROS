@@ -205,3 +205,39 @@ button:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 12px; color: var(--text-secondary); }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend i { display: inline-block; width: 10px; height: 10px; }
+
+/* Geçmiş koşular */
+.history { margin-top: 14px; }
+.history .cardhead { gap: 12px; }
+.history .cardhead .path { text-align: right; min-width: 0; }
+.histbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 8px; }
+.field { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+select {
+  font: inherit; font-size: 13px; color: var(--text-primary); background: var(--surface-2);
+  border: 0.5px solid var(--border-strong); border-radius: var(--radius); padding: 4px 8px; max-width: 220px;
+}
+select:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 1px; }
+.btn.sm { font-size: 12px; padding: 4px 10px; }
+.tablewrap { max-height: 440px; overflow: auto; border-top: 0.5px solid var(--border); }
+.runs { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.runs th {
+  position: sticky; top: 0; z-index: 1; background: var(--surface-2); text-align: left; font-weight: 400;
+  font-size: 12px; color: var(--text-secondary); padding: 6px 8px; border-bottom: 0.5px solid var(--border); white-space: nowrap;
+}
+.runs td { padding: 6px 8px; border-bottom: 0.5px solid var(--border); white-space: nowrap; }
+.runs .num { text-align: right; }
+.runs td.task { white-space: normal; min-width: 160px; }
+.runs td.scn { font-weight: 500; }
+.runs td.c-var, .runs td.c-date { color: var(--text-secondary); }
+.runs tbody tr { cursor: pointer; }
+.runs tbody tr:hover { background: var(--surface-1); }
+.runs tbody tr.on { background: var(--accent-bg); }
+.runs tbody tr:focus-visible { outline: 2px solid var(--accent-border); outline-offset: -2px; }
+.runs .ok { color: var(--success-text); }
+.runs .bad { color: var(--danger-text); }
+.pill { font-size: 11px; padding: 1px 6px; border-radius: 4px; margin-left: 6px; white-space: nowrap; background: var(--accent-bg); color: var(--accent-text); }
+.pill.warn { background: var(--warning-bg); color: var(--warning-text); }
+.histmsg { margin: 8px 0 0; }
+.histmsg:empty { display: none; }
+@media (max-width: 860px) { .runs .c-var, .runs .c-path, .runs .c-eff { display: none; } }
+@media (max-width: 520px) { .runs .c-date { display: none; } .runs td.task { min-width: 0; } }

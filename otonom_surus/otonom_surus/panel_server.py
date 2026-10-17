@@ -6,7 +6,8 @@ istekleri ThreadingHTTPServer'ın iş parçacıklarında karşılanır. Canlı v
 Server-Sent Events (SSE) ile akar: bağlı her sekmenin bir kuyruğu vardır, Broadcaster olayları
 bütün kuyruklara dağıtır, /api/stream isteği kendi kuyruğunu boşaltır. Koşuları panel_process'in
 RunManager'ı alt süreç olarak başlatır ve durdurur; ROS konularını panel_live'ın LiveBridge'i
-önbelleğe alıp hız sınırlı olaylar olarak gönderir. Python standart kütüphanesi ve Pillow yeter.
+önbelleğe alıp hız sınırlı olaylar olarak gönderir; geçmiş koşuları panel_runs'ın RunIndex'i
+results/ altından okur. Python standart kütüphanesi ve Pillow yeter.
 
 Sunucu yalnızca 127.0.0.1'e bağlanır (kimlik doğrulama yok); WSL2'nin localhost yönlendirmesi
 sayesinde Windows tarayıcısından http://localhost:<port> ile açılır.
@@ -15,12 +16,15 @@ Uç noktalar:
     GET  /                web/ klasöründeki arayüz (index.html, app.js, style.css)
     GET  /api/health      sunucu durumu
     GET  /api/stream      SSE: hello (durum, son günlük, canlı verinin son hali), ping, run, log,
-                          run_finished; canlı: status, pose, trail, plan, map (panel_live)
+                          run_finished, runs_changed; canlı: status, pose, trail, plan, map
     GET  /api/worlds      paketteki dünyaların geometrisi (world_sdf)
     GET  /api/scenarios   scenarios.yaml'daki senaryolar (hedef yaw'ları derece)
     GET  /api/run         koşunun durumu
     POST /api/run/start   {"scenario": 1, "gui": true, "rviz": false}
     POST /api/run/stop
+    GET  /api/runs        geçmiş koşular, en yeni önce (?world=senaryo2.world)
+    GET  /api/runs/<kimlik>             tek koşu (kimlik: s1_r1, parametre_fpd2/s2_r1 ...)
+    GET  /api/runs/<kimlik>/trajectory  yörünge [[t, x, y], ...] (?dt=0.5: seyreltilmiş)
 
 Kullanım:
     ros2 launch otonom_surus panel.launch.py
@@ -34,19 +38,20 @@ import queue
 import signal
 import threading
 import time
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
 from otonom_surus.panel_live import LiveBridge
 from otonom_surus.panel_process import RunError, RunManager
+from otonom_surus.panel_runs import RunIndex
 from otonom_surus.scenarios import load_scenario, scenario_numbers
 from otonom_surus.world_sdf import world_geometry
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
-VERSION = '0.3.0'
+VERSION = '0.4.0'
 HOST = '127.0.0.1'  # bilerek parametre değil: panelin ağa açılmaması için (PT18)
 PING_PERIOD = 5.0  # s; istemci 10 s veri alamazsa bağlantıyı kopmuş sayar
 SSE_RETRY_MS = 3000  # tarayıcının kopunca yeniden bağlanma aralığı
@@ -89,6 +94,38 @@ def sse_event(event, data):
     """Bir SSE çerçevesi: 'event: <ad>', tek satır JSON 'data:' ve boş satır (UTF-8)."""
     payload = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
     return f'event: {event}\ndata: {payload}\n\n'.encode('utf-8')
+
+
+def runs_route(index, path, query):
+    """
+    Koşu dizininin uçları (RunIndex): (HTTP durum kodu, JSON verisi); bilinmeyen yolda None.
+
+    Kimlikte '/' bulunabilir (parametre_fpd2/s2_r1); yüzde kodlaması çözülür. Kimlik yalnızca
+    dizinde aranır, dosya yolu kullanıcı girdisinden kurulmaz.
+    """
+    if path == '/api/runs':
+        return 200, {'root': index.root, 'runs': index.runs(query.get('world') or None),
+                     'warnings': index.warnings()}
+    if not path.startswith('/api/runs/'):
+        return None
+    rest = unquote(path[len('/api/runs/'):])
+    if rest.endswith('/trajectory'):
+        run_id = rest[:-len('/trajectory')]
+        try:
+            dt = float(query.get('dt') or 0)
+        except ValueError:
+            return 400, {'error': 'dt sayı olmalı'}
+        try:
+            points = index.trajectory(run_id, dt if math.isfinite(dt) and dt > 0 else None)
+        except KeyError:
+            return 404, {'error': f'koşu bulunamadı: {run_id}'}
+        except FileNotFoundError:
+            return 404, {'error': f'{run_id}: yörünge kaydı yok'}
+        return 200, {'id': run_id, 'pts': points}
+    record = index.get(rest)
+    if record is None:
+        return 404, {'error': f'koşu bulunamadı: {rest}'}
+    return 200, record
 
 
 class Broadcaster:
@@ -150,17 +187,19 @@ class PanelHandler(BaseHTTPRequestHandler):
 
     self.server.panel; web_dir, broadcaster, hello(), api(method, path, body) ve log_request()
     sağlayan nesnedir: çalışırken PanelServer düğümü, testlerde onun yerine geçen basit bir nesne.
-    api() bilinmeyen uçta None, bilinende (HTTP durum kodu, JSON verisi) döndürür.
+    api() bilinmeyen uçta None, bilinende (HTTP durum kodu, JSON verisi) döndürür. body,
+    POST'ta JSON gövdesi, GET'te sorgu parametreleridir ({ad: son değer}).
     """
 
     server_version = 'OtonomPanel/' + VERSION
 
     def do_GET(self):  # noqa: N802 (http.server'ın adlandırması)
-        path = urlsplit(self.path).path
-        if path == '/api/stream':
+        url = urlsplit(self.path)
+        if url.path == '/api/stream':
             self.stream()
-        elif path.startswith('/api/'):
-            self.api('GET', path, None)
+        elif url.path.startswith('/api/'):
+            query = {k: v[-1] for k, v in parse_qs(url.query).items()}
+            self.api('GET', url.path, query)
         else:
             self.send_static()
 
@@ -261,7 +300,7 @@ def make_server(panel, host, port):
 
 
 class PanelServer(Node):
-    """Panelin ROS tarafı: parametreler, API, koşu yöneticisi ve SSE dağıtıcısı."""
+    """Panelin ROS tarafı: parametreler, API, koşu yöneticisi, koşu dizini ve SSE dağıtıcısı."""
 
     def __init__(self):
         super().__init__('panel_server')
@@ -270,10 +309,20 @@ class PanelServer(Node):
         self.port = self.declare_parameter('port', 8080).value
         self.results_dir = os.path.abspath(os.path.expanduser(
             self.declare_parameter('results_dir', 'results/panel').value))
+        # Geçmiş koşuların kökü; boşsa results_dir'in üst klasörü (results/panel -> results).
+        runs_root = self.declare_parameter('runs_root', '').value
+        self.runs_root = (os.path.abspath(os.path.expanduser(runs_root)) if runs_root
+                          else os.path.dirname(self.results_dir))
         self.web_dir = self.declare_parameter('web_dir', os.path.join(share, 'web')).value
         self.scenarios_file = self.declare_parameter('scenarios_file', default_scenarios).value
         self.worlds_dir = os.path.join(share, 'worlds')
         self.broadcaster = Broadcaster()
+        self.index = RunIndex(
+            self.runs_root, panel_dir=self.results_dir,
+            base_params=os.path.join(share, 'config', 'nav2_params.yaml'),
+            scenario_files=[self.scenarios_file,
+                            os.path.join(self.results_dir, 'panel_scenarios.yaml')])
+        self.announced = set()  # bittiği runs_changed ile duyurulan görevler (run_id)
         self.live = LiveBridge(self, self.broadcaster.publish, on_status=self.on_mission_status,
                                movers=self.mover_names())
         # scenarios_file varsayılansa komuta yazılmaz (launch'ın varsayılanı aynı dosya).
@@ -294,13 +343,33 @@ class PanelServer(Node):
         return sorted(names)
 
     def on_run_event(self, event, data):
-        """RunManager'ın olayları; yeni koşu başlarken önceki koşunun canlı verisi silinir."""
+        """
+        RunManager'ın olayları; yeni koşu başlarken önceki koşunun canlı verisi silinir.
+
+        run_finished'e koşunun dizindeki kimliği (index_id) eklenir: istemci listeyi yeniler
+        ve o satırı "az önce" diye işaretler.
+        """
         if event == 'run' and data.get('phase') == 'starting':
             self.live.reset()
+        if event == 'run_finished':
+            data = dict(data, index_id=self.index.id_for(
+                self.results_dir, data.get('scenario'), data.get('run_id')))
         self.broadcaster.publish(event, data)
 
     def on_mission_status(self, status):
+        """
+        /mission_status: koşu aşaması RunManager'a; biten görev runs_changed ile duyurulur.
+
+        mission_manager 'finished'i sonuçları yazdıktan sonra yayınlar; panelin koşusu da panel
+        dışından başlatılan görev de böylece launch kapanmayı beklemeden listeye düşer. Görev
+        başına bir kez (bittikten sonra durum 1 Hz'de tekrarlanır).
+        """
         self.runs.on_status(status)
+        run_id = status.get('run_id')
+        if status.get('state') == 'finished' and run_id not in self.announced:
+            self.announced.add(run_id)
+            self.broadcaster.publish('runs_changed', {'id': self.index.id_for(
+                status.get('results_dir') or '', status.get('scenario'), run_id)})
 
     def health(self):
         return {
@@ -310,6 +379,7 @@ class PanelServer(Node):
             'ros': rclpy.ok(),
             'sim': self.runs.state()['phase'],
             'results_dir': self.results_dir,
+            'runs_root': self.runs_root,
             'clients': self.broadcaster.count(),
             'uptime_s': round(time.monotonic() - self.started, 1),
         }
@@ -326,7 +396,7 @@ class PanelServer(Node):
                         '/api/scenarios': self.scenarios,
                         '/api/run': lambda: (200, self.runs.state())}
             handler = handlers.get(path)
-            return handler() if handler else None
+            return handler() if handler else runs_route(self.index, path, body or {})
         if method == 'POST' and path == '/api/run/start':
             return self.start_run(body)
         if method == 'POST' and path == '/api/run/stop':

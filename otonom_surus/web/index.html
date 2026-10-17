@@ -54,14 +54,21 @@
     </section>
 
     <aside class="side">
-      <section class="card" aria-label="Koşu">
+      <section id="runCard" class="card" aria-label="Koşu">
         <div class="runhead"><span id="badge" class="badge neutral">Hazır</span><span id="runScn" class="muted small"></span></div>
         <p id="runGoal" class="runline">Koşu yok</p>
         <div id="bars" class="bars"></div>
         <dl id="runSummary" class="kv summary"></dl>
         <p id="runMsg" class="muted small"></p>
       </section>
-      <section class="metrics" aria-label="Metrikler">
+      <section id="replayCard" class="card" aria-label="Seçili koşu" style="display:none">
+        <div class="runhead"><span id="rpBadge" class="badge neutral">Koşu seçilmedi</span><span id="rpScn" class="muted small"></span></div>
+        <p id="rpLine" class="runline">Geçmiş koşular tablosundan bir koşu seç</p>
+        <div id="rpBars" class="bars"></div>
+        <dl id="rpSummary" class="kv summary"></dl>
+        <p id="rpMsg" class="muted small"></p>
+      </section>
+      <section id="metrics" class="metrics" aria-label="Metrikler">
         <div class="mc"><p class="ml">Sim süresi</p><p class="mv" id="mTime">–</p></div>
         <div class="mc"><p class="ml">Kat edilen yol</p><p class="mv" id="mDist">–</p></div>
         <div class="mc"><p class="ml">En yakın engel</p><p class="mv" id="mNear">–</p></div>
@@ -86,6 +93,27 @@
       </section>
     </aside>
   </main>
+
+  <section id="history" class="card history" aria-labelledby="histTitle">
+    <div class="cardhead">
+      <span class="title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v4l2.5 2.5"/><path d="M3.5 13a8.5 8.5 0 1 0 2.2-6.2L3 9.5"/><path d="M3 4.5v5h5"/></svg><span id="histTitle">Geçmiş koşular</span></span>
+      <span id="histRoot" class="mono path"></span>
+    </div>
+    <div class="histbar">
+      <label class="field">Dünya <select id="fWorld"><option value="">Hepsi</option></select></label>
+      <label class="field">Sonuç <select id="fResult"><option value="">Hepsi</option><option value="ok">Başarılı</option><option value="bad">Başarısız</option></select></label>
+      <span id="histCount" class="muted small"></span>
+      <span class="spacer"></span>
+      <button type="button" id="histReload" class="btn sm"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>Yenile</button>
+    </div>
+    <div class="tablewrap">
+      <table class="runs">
+        <thead><tr><th class="c-date">Tarih</th><th>Sen.</th><th>Görev</th><th class="c-var">Varyant</th><th>Sonuç</th><th class="num">Süre</th><th class="num c-path">Yol</th><th class="num c-eff">Verim</th></tr></thead>
+        <tbody id="runRows"></tbody>
+      </table>
+    </div>
+    <p id="histMsg" class="muted small histmsg"></p>
+  </section>
 </div>
 <script src="app.js"></script>
 </body>
