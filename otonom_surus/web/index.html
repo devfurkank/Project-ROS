@@ -42,13 +42,42 @@
     <p id="err" class="err" role="alert"></p>
   </section>
 
+  <section id="replayTop" class="livetop" aria-label="Tekrar oynatılacak koşular" style="display:none">
+    <div class="taskrow">
+      <span class="label-inline">Dünya</span>
+      <div id="rpWorlds" class="chips"></div>
+      <span class="spacer"></span>
+      <span id="rpSelCount" class="muted small"></span>
+      <button type="button" id="rpClear" class="btn sm">Seçimi temizle</button>
+    </div>
+    <div class="tablewrap picker">
+      <table class="runs">
+        <thead><tr><th class="c-pick"><span class="sr">Seç</span></th><th class="c-date">Tarih</th><th>Sen.</th><th>Varyant</th><th>Sonuç</th><th class="num">Süre</th><th class="num c-path">Yol</th><th class="c-rec">Kayıt</th></tr></thead>
+        <tbody id="pickRows"></tbody>
+      </table>
+    </div>
+    <p id="pickMsg" class="muted small histmsg"></p>
+  </section>
+
   <main class="grid">
     <section class="card mapcard" aria-labelledby="mapTitle">
       <div class="cardhead">
         <span class="title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7l6-3 6 3 6-3v13l-6 3-6-3-6 3z"/><path d="M9 4v13M15 7v13"/></svg><span id="mapTitle">Canlı harita</span></span>
         <span id="coord" class="mono"></span>
       </div>
+      <div id="playbar" class="playbar" style="display:none">
+        <button type="button" id="rpPlay" class="btn primary sm"><svg id="rpPlayIcon" class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg><span id="rpPlayText">Oynat</span></button>
+        <button type="button" id="rpBack" class="btn sm" aria-label="Başa sar" title="Başa sar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 5v14L8 12z"/><path d="M5 5v14"/></svg></button>
+        <span class="label-inline">Hız</span>
+        <div id="rpSpeeds" class="chips" role="group" aria-label="Oynatma hızı"></div>
+        <span class="spacer"></span>
+        <span id="rpTime" class="mono small" aria-live="off"></span>
+      </div>
       <canvas id="map" aria-label="Harita"></canvas>
+      <div id="tlBox" class="tlbox" style="display:none">
+        <p class="label">Zaman çizelgesi · tıkla ya da sürükle (klavyede ← → 1 s, Shift ile 10 s, boşluk oynat)</p>
+        <canvas id="tl" tabindex="0" aria-label="Zaman çizelgesi"></canvas>
+      </div>
       <p id="hint" class="hint"></p>
       <div id="legend" class="legend"></div>
     </section>
@@ -61,12 +90,14 @@
         <dl id="runSummary" class="kv summary"></dl>
         <p id="runMsg" class="muted small"></p>
       </section>
-      <section id="replayCard" class="card" aria-label="Seçili koşu" style="display:none">
-        <div class="runhead"><span id="rpBadge" class="badge neutral">Koşu seçilmedi</span><span id="rpScn" class="muted small"></span></div>
-        <p id="rpLine" class="runline">Geçmiş koşular tablosundan bir koşu seç</p>
-        <div id="rpBars" class="bars"></div>
-        <dl id="rpSummary" class="kv summary"></dl>
-        <p id="rpMsg" class="muted small"></p>
+      <section id="replayCard" class="card" aria-label="Seçili koşular" style="display:none">
+        <div class="runhead"><span class="label flat">Seçili koşular</span><span id="rpCount" class="muted small"></span></div>
+        <div id="rpCards" class="rcards"></div>
+        <p id="rpEmpty" class="muted small flat">Yukarıdaki listeden en çok 6 koşu seç; numaralar haritadaki robotlarla ve zaman çizelgesiyle eşleşir.</p>
+      </section>
+      <section id="diffCard" class="card" aria-label="Fark" style="display:none">
+        <p class="label">Fark <span class="muted">(veriden)</span></p>
+        <ul id="rpDiff" class="diff"></ul>
       </section>
       <section id="metrics" class="metrics" aria-label="Metrikler">
         <div class="mc"><p class="ml">Sim süresi</p><p class="mv" id="mTime">–</p></div>

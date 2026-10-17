@@ -1,7 +1,8 @@
 // Otonom sürüş paneli istemcisi.
 // P1: bağlantı göstergesi, mod seçici. P2: dünya kartları, görev seçimi, başlat/durdur, koşu kartı.
 // P3: canlı harita (SLAM, robot, iz, Nav2 planı, hareketli kutular), görev durumu ve metrikler.
-// P4: geçmiş koşular tablosu (koşu dizini), seçili koşunun yörüngesi (tekrar oynatmanın temeli).
+// P4: geçmiş koşular tablosu (koşu dizini). P5: tekrar oynatma: dünya ve en çok 6 koşu seçilir,
+// hayalet robotlar kaydedilmiş yörüngelerinde birlikte oynar; zaman çizelgesi, koşu kartları, fark.
 // Sunucuyla iki yol: /api/stream (SSE, sunucu -> tarayıcı) ve /api/... (JSON istekleri).
 'use strict';
 
@@ -12,17 +13,18 @@ const MODES = {
     hint: 'Önizleme: seçili dünya, görevin hedefleri ve robotun doğduğu nokta. Başlatınca SLAM ' +
       'haritası, robot, izlenen yol ve Nav2 planı canlı çizilir.'},
   replay: {title: 'Tekrar oynatma', empty: 'Koşu seçilmedi',
-    hint: 'Aşağıdaki “Geçmiş koşular” tablosundan bir koşu seç; kaydedilmiş yörüngesi burada ' +
-      'çizilir. Oynatıcı, çoklu seçim ve zaman çizelgesi P5’te gelecek.'},
+    hint: 'Yukarıdan bir dünya ve en çok 6 koşu seç; Oynat ile robotlar kaydedilmiş ' +
+      'yörüngelerinde birlikte yürür.'},
   edit: {title: 'Dünya tasarla', empty: 'Tasarlayıcı yakında',
     hint: 'Dünya tasarlayıcı P9’da gelecek.'},
 };
 const LIVE_HINT = 'Canlı: SLAM haritası (/map; sisli alan henüz görülmedi), robot (TF map → ' +
   'base_footprint), izlenen yol ve kesikli Nav2 planı. İnce çizgiler dünyanın gerçek geometrisi; ' +
   'SLAM haritasıyla arasındaki fark haritalama hatasıdır.';
-const REPLAY_HINT = 'Kaydedilmiş yörünge (/odom, dünya koordinatı), hedeflerin sonuçları, ' +
-  'başlangıç ve son konum. Hareketli kutuların konum kaydı yok: doğdukları yer ve şeritleri ' +
-  'çiziliyor. Oynatıcı ve çoklu seçim P5’te.';
+const REPLAY_HINT = 'Kaydedilmiş yörüngeler (/odom, dünya koordinatı) zaman ekseninde oynar; ' +
+  'robotların numaraları koşu kartlarıyla eşleşir. Zaman çizelgesinde soluk bant robotun ' +
+  'hareketsiz kaldığı aralıklar (iki kayıt arası > 1.5 s), dikey çizgiler hedef sonuçları ' +
+  '(kırmızı: başarısız). Hareketli kutuların konum kaydı yok: doğdukları yer ve şeritleri çiziliyor.';
 // Koşu aşamaları: [rozet metni, rozet rengi]. watching/watched: panel dışından başlatılmış görev.
 const PHASES = {
   idle: ['Hazır', 'neutral'],
@@ -44,6 +46,15 @@ const POSE_STALE_MS = 3000;  // bu kadar süre konum gelmezse anlık metrikler '
 const EXTERNAL_STALE_MS = 5000;  // panel dışı görevin durumu bu kadar gelmezse izleme biter
 const FRESH_MS = 120000;  // bu kadar süre önce yazılmış koşu tabloda "az önce" diye işaretlenir
 const LOG_LINES = 80;
+// Tekrar oynatma
+const MAX_RUNS = 6;  // aynı anda oynayan koşu (renk paleti de 6: style.css --run-*)
+const SPEEDS = [1, 2, 10, 30];
+const HOLD_GAP = 1.5;  // s; iki kayıt arası bundan uzunsa robot yerinde durmuş (kayıt hareketle yazılır)
+const HOLD_RING = 4;  // s; bundan uzun hareketsizlikte robotun çevresinde halka
+const RESULT_HOLD = 6;  // s; hedef bitince koşu kartında sonucu bu kadar gösterilir
+const STUCK_RADIUS = 0.5;  // m; takılma: robotun bu yarıçapın içinde kaldığı en uzun süre
+const STUCK_MIN = 20;  // s; daha kısası takılma sayılmaz (temel koşularda hedefte dönüş ≤ 12 s)
+const TL = {row: 22, top: 4, axis: 22, pad: 10};  // zaman çizelgesinin ölçüleri (px)
 const LEGENDS = {
   preview: [['dot', '--map-robot', 'Robot (doğduğu yer)'], ['ring', '--map-goal', 'Hedef'],
     ['box', '--map-wall', 'Duvar'], ['box', '--map-obstacle', 'Engel'],
@@ -53,12 +64,14 @@ const LEGENDS = {
     ['ring', '--map-ok', 'Varıldı'], ['ring', '--map-bad', 'Başarısız'],
     ['box', '--map-slam', 'SLAM: dolu'], ['box', '--map-fog', 'Henüz görülmedi'],
     ['outline', '--map-wall', 'Gerçek geometri'], ['box', '--map-moving', 'Hareketli kutu']],
-  replay: [['dot', '--map-robot', 'Robot (son konum)'], ['ring', '--map-robot', 'Başlangıç'],
-    ['line', '--map-path', 'İzlenen yol'], ['ring', '--map-goal', 'Hedef'],
-    ['ring', '--map-ok', 'Varıldı'], ['ring', '--map-bad', 'Başarısız'],
+  replay: [['dot', '--run-1', 'Robot (numarası koşu kartında)'], ['line', '--run-1', 'İzlenen yol'],
+    ['ring', '--text-muted', 'Başlangıç; hareketsiz > 4 s'], ['ring', '--map-goal', 'Hedef'],
     ['box', '--map-wall', 'Duvar'], ['box', '--map-obstacle', 'Engel'],
     ['dash', '--map-moving', 'Hareketli kutunun şeridi']],
 };
+// Tek koşu görünürken hedefler sonucuyla renklenir.
+LEGENDS.replay1 = LEGENDS.replay.slice(0, 4).concat(
+  [['ring', '--map-ok', 'Varıldı'], ['ring', '--map-bad', 'Başarısız']], LEGENDS.replay.slice(4));
 
 const state = {
   mode: 'live',
@@ -83,8 +96,11 @@ const state = {
   runsLoaded: false,
   freshId: null,
   filter: {world: '', result: ''},
-  // Tekrar oynatma: seçili koşu ve yörünge önbelleği (kimlik -> [[t, x, y], ...]).
-  replay: {id: null, traj: {}, errors: {}, pending: {}},
+  runIndex: new Map(),  // kimlik -> koşu
+  // Tekrar oynatma. sel: dünya -> seçili koşu kimlikleri; colors: kimlik -> renk ve numara sırası
+  // (0–5; koşu seçimden çıkana kadar sabit); tracks: kimlik -> yörünge ve ondan türetilenler.
+  replay: {world: null, sel: {}, colors: {}, hidden: {}, tracks: {}, errors: {}, pending: {},
+    t: 0, playing: false, speed: 10, hoverT: null, dragging: false, labelW: 0, legacy: null},
 };
 
 // Canlı verinin önbelleği; yeni koşu başlarken boşaltılır. scenario: verinin ait olduğu senaryo.
@@ -296,7 +312,7 @@ async function loadCatalog() {
     renderRun();
     renderMetrics();
     renderRuns();  // senaryo adları ve dünya kartlarının adları artık biliniyor
-    renderReplay();
+    renderReplayAll();
     drawMap();
   } catch (e) {
     $('err').textContent = `Dünyalar ya da senaryolar yüklenemedi: ${e.message}`;
@@ -724,8 +740,9 @@ async function loadRuns() {
     if (seq !== runsSeq) return;
     state.runsError = `Koşu listesi yüklenemedi: ${e.message}`;
   }
+  state.runIndex = new Map(state.runs.map((r) => [r.id, r]));
   renderRuns();
-  renderReplay();
+  replayRunsLoaded();
   redraw();
 }
 
@@ -759,21 +776,27 @@ function shortDate(ts) {
   return `${d.toLocaleDateString('tr-TR', opts)} ${hm}`;
 }
 
-// Dünya süzgeci: koşusu olan dünyalar, katalogdaki sırayla ve kart adlarıyla, koşu sayılarıyla.
-// Kaydedilmiş seçimin koşusu (henüz) yoksa "Hepsi" gösterilir ama seçim unutulmaz.
+function worldKey(run) {
+  return run.world || '?';
+}
+
+// Koşusu olan dünyalar: katalogdaki sırayla ve kart adlarıyla, sonra bilinmeyenler; koşu sayılarıyla.
+function runWorlds() {
+  const counts = new Map();
+  state.runs.forEach((r) => counts.set(worldKey(r), (counts.get(worldKey(r)) || 0) + 1));
+  const titles = new Map(worldGroups().map((g) => [g.file, g.title]));
+  return [...new Set([...titles.keys(), ...counts.keys()])].filter((f) => counts.has(f)).map((f) => (
+    {file: f, title: f === '?' ? 'Bilinmeyen dünya' : titles.get(f) || f, count: counts.get(f)}));
+}
+
+// Dünya süzgeci. Kaydedilmiş seçimin koşusu (henüz) yoksa "Hepsi" gösterilir ama seçim unutulmaz.
 function renderWorldFilter() {
   const sel = $('fWorld');
-  const counts = new Map();
-  state.runs.forEach((r) => counts.set(r.world || '?', (counts.get(r.world || '?') || 0) + 1));
-  const titles = new Map(worldGroups().map((g) => [g.file, g.title]));
-  const files = [...new Set([...titles.keys(), ...counts.keys()])].filter((f) => counts.has(f));
+  const worlds = runWorlds();
   sel.textContent = '';
   sel.appendChild(new Option(`Hepsi (${state.runs.length})`, ''));
-  files.forEach((f) => {
-    const name = f === '?' ? 'Bilinmeyen dünya' : titles.get(f) || f;
-    sel.appendChild(new Option(`${name} (${counts.get(f)})`, f));
-  });
-  sel.value = counts.has(state.filter.world) ? state.filter.world : '';
+  worlds.forEach((w) => sel.appendChild(new Option(`${w.title} (${w.count})`, w.file)));
+  sel.value = worlds.some((w) => w.file === state.filter.world) ? state.filter.world : '';
 }
 
 function renderRuns() {
@@ -781,7 +804,7 @@ function renderRuns() {
   $('fResult').value = state.filter.result;
   const world = $('fWorld').value;
   const result = $('fResult').value;
-  const rows = state.runs.filter((r) => (!world || (r.world || '?') === world) &&
+  const rows = state.runs.filter((r) => (!world || worldKey(r) === world) &&
     (!result || (result === 'ok') === isSuccess(r)));
   const body = $('runRows');
   body.textContent = '';
@@ -831,54 +854,794 @@ function runRow(run) {
   return tr;
 }
 
+// Satır, tekrar oynatmada seçili koşulardan biriyse işaretlenir.
 function markRow(tr) {
-  const on = tr.dataset.id === state.replay.id;
+  const on = isPicked(tr.dataset.id);
   tr.classList.toggle('on', on);
   tr.setAttribute('aria-selected', String(on));
 }
 
-// Satıra tıklayınca koşu tekrar oynatmada açılır; harita görünür olsun diye sayfa ona kayar.
+// Geçmiş koşular tablosunda satıra tıklayınca koşu tekrar oynatmada açılır: dünyası seçilir, koşu
+// o dünyanın seçimine eklenir (6 doluysa en eski çıkar); harita görünsün diye sayfa ona kayar.
 function openRun(id) {
-  state.replay.id = id;
-  store('panel.replay', id);
-  document.querySelectorAll('#runRows tr').forEach(markRow);
-  if (state.mode !== 'replay') setMode('replay');
-  else {
-    renderReplay();
-    redraw();
+  const run = state.runIndex.get(id);
+  if (!run) return;
+  const R = state.replay;
+  R.world = worldKey(run);
+  const ids = pickedIds();
+  if (!ids.includes(id)) {
+    if (ids.length >= MAX_RUNS) dropRun(ids[0]);
+    pickRun(id);
   }
+  pause();
+  R.t = 0;
+  saveReplay();
+  if (state.mode !== 'replay') setMode('replay');
+  else renderReplayAll();
   document.querySelector('.mapcard').scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
-// --- Tekrar oynatma (P4: seçili koşunun yörüngesi; oynatıcı ve çoklu seçim P5'te) -----------
+// --- Tekrar oynatma ------------------------------------------------------------------------
+// Önce dünya seçilir (aynı dünyayı paylaşan senaryolar birlikte: S3, S4, S5), sonra o dünyanın en
+// çok 6 koşusu; hepsi aynı zaman ekseninde oynar (t = sim zamanı − t0, her koşu kendi başından).
+// Koşunun kimliği numarasıdır (1–6: robot etiketi, kart, zaman çizelgesi); renk ikincil ipucu,
+// çünkü 6 renk tüm çiftlerde ayrışamıyor (style.css, --run-*).
 
-function selectedRun() {
-  return state.runs.find((r) => r.id === state.replay.id) || null;
+function pickedIds() {
+  return state.replay.sel[state.replay.world] || [];
 }
+
+// Seçili ve listede bulunan koşular, numara sırasıyla.
+function pickedRuns() {
+  const R = state.replay;
+  return pickedIds().map((id) => state.runIndex.get(id)).filter(Boolean)
+    .sort((a, b) => R.colors[a.id] - R.colors[b.id]);
+}
+
+function isPicked(id) {
+  return Object.values(state.replay.sel).some((ids) => ids.includes(id));
+}
+
+// Seçime ekler; numara (ve renk) dünyanın seçiminde boştaki ilk sıra, koşu çıkana kadar değişmez.
+function pickRun(id) {
+  const R = state.replay;
+  const ids = R.sel[R.world] || (R.sel[R.world] = []);
+  const used = new Set(ids.map((k) => R.colors[k]));
+  let slot = 0;
+  while (used.has(slot)) slot++;
+  R.colors[id] = slot;
+  ids.push(id);
+}
+
+function dropRun(id) {
+  const R = state.replay;
+  R.sel[R.world] = pickedIds().filter((k) => k !== id);
+  delete R.colors[id];
+  delete R.hidden[id];
+}
+
+function toggleRun(id) {
+  if (pickedIds().includes(id)) {
+    dropRun(id);
+  } else if (pickedIds().length >= MAX_RUNS) {
+    syncPicker();  // işaretlenen kutu geri alınır
+    $('pickMsg').textContent = `En çok ${MAX_RUNS} koşu seçilebilir; önce birini çıkar.`;
+    return;
+  } else {
+    pickRun(id);
+  }
+  saveReplay();
+  renderReplayAll(false);
+}
+
+function setReplayWorld(world) {
+  const R = state.replay;
+  if (R.world === world) return;
+  R.world = world;
+  pause();
+  R.t = 0;
+  saveReplay();
+  renderReplayAll();
+}
+
+function saveReplay() {
+  const R = state.replay;
+  store('panel.replay.v2', JSON.stringify({world: R.world, sel: R.sel, colors: R.colors}));
+}
+
+function restoreReplay() {
+  const R = state.replay;
+  const raw = restore('panel.replay.v2');
+  try {
+    const saved = JSON.parse(raw || 'null');
+    if (saved && typeof saved === 'object') {
+      R.world = typeof saved.world === 'string' ? saved.world : null;
+      Object.entries(saved.sel || {}).forEach(([world, ids]) => {
+        if (Array.isArray(ids)) R.sel[world] = ids.filter((id) => typeof id === 'string');
+      });
+      Object.entries(saved.colors || {}).forEach(([id, slot]) => {
+        if (Number.isInteger(slot) && slot >= 0 && slot < MAX_RUNS) R.colors[id] = slot;
+      });
+    }
+  } catch (e) {
+    // Bozuk kayıt: boş seçimle başlanır.
+  }
+  if (raw === null) R.legacy = restore('panel.replay');  // P4'ün tek koşusu seçime eklenir
+  const speed = Number(restore('panel.replay.speed'));
+  if (SPEEDS.includes(speed)) R.speed = speed;
+}
+
+// Koşu listesi geldi: seçim temizlenir (listede olmayanlar ve geçersiz numaralar), dünya seçilir.
+function replayRunsLoaded() {
+  const R = state.replay;
+  if (!state.runsLoaded) {
+    renderReplayAll();  // liste gelmedi: seçicide "Yükleniyor" ya da hata
+    return;
+  }
+  Object.keys(R.sel).forEach((world) => {
+    const seen = new Set();
+    const ids = R.sel[world].filter((id) => state.runIndex.has(id) && !seen.has(id) &&
+      seen.add(id)).slice(0, MAX_RUNS);
+    R.sel[world] = [];
+    const prev = R.world;
+    R.world = world;
+    ids.forEach((id) => {
+      const slot = R.colors[id];
+      const taken = R.sel[world].some((k) => R.colors[k] === slot);
+      if (Number.isInteger(slot) && !taken) R.sel[world].push(id);
+      else pickRun(id);
+    });
+    R.world = prev;
+  });
+  const legacy = R.legacy && state.runIndex.get(R.legacy);
+  R.legacy = null;
+  if (legacy) {
+    R.world = worldKey(legacy);
+    if (!isPicked(legacy.id)) pickRun(legacy.id);
+  }
+  if (!runWorlds().some((w) => w.file === R.world)) {
+    R.world = state.runs.length ? worldKey(state.runs[0]) : null;
+  }
+  saveReplay();
+  renderReplayAll();
+}
+
+// Seçim, dünya ya da koşu listesi değişti. rebuild: seçici tablosu baştan kurulsun mu (yalnızca
+// seçim değiştiyse satırlar yerinde güncellenir, klavye odağı kaybolmaz).
+function renderReplayAll(rebuild = true) {
+  if (rebuild) renderPicker();
+  else syncPicker();
+  renderCards();
+  renderDiff();
+  ensureTracks();
+  sizeTimeline();
+  state.replay.t = Math.min(state.replay.t, timeMax());
+  renderPlayButton();
+  document.querySelectorAll('#runRows tr').forEach(markRow);
+  renderFrame();
+}
+
+// --- Koşu seçici ---------------------------------------------------------------------------
+
+function shortLabel(label) {
+  // forward_prune_distance 2.0 -> fpd 2.0 (alt çizgili parametre adının baş harfleri)
+  return label.replace(/\b[a-z]+(?:_[a-z]+)+\b/g, (w) => w.split('_').map((s) => s[0]).join(''));
+}
+
+function runTag(run) {
+  const m = /^p(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}$/.exec(run.run_id);
+  return m ? `${m[3]}.${m[2]} ${m[4]}:${m[5]}` : run.run_id;
+}
+
+function shortName(run) {
+  return `S${run.scenario} · ${shortLabel(run.label)} · ${runTag(run)}`;
+}
+
+function recordText(run) {
+  const tags = [['events', 'olay'], ['obstacles', 'engel'], ['replay', 'ayrıntılı']]
+    .filter(([k]) => run.files[k]).map(([, text]) => text);
+  if (tags.length) return tags.join(' · ');
+  return run.files.trajectory ? 'yörünge' : 'yok';
+}
+
+function numBadge(id) {
+  const slot = state.replay.colors[id];
+  const badge = el('span', 'rnum');
+  const dot = el('i');
+  dot.style.background = `var(--run-${slot + 1})`;
+  badge.append(dot, String(slot + 1));
+  return badge;
+}
+
+function renderPicker() {
+  const R = state.replay;
+  const chips = $('rpWorlds');
+  chips.textContent = '';
+  runWorlds().forEach((w) => {
+    const chip = el('button', 'chip' + (w.file === R.world ? ' on' : ''));
+    chip.type = 'button';
+    chip.setAttribute('aria-pressed', String(w.file === R.world));
+    chip.appendChild(document.createTextNode(w.title));
+    chip.appendChild(el('span', 'tag', String(w.count)));
+    chip.addEventListener('click', () => setReplayWorld(w.file));
+    chips.appendChild(chip);
+  });
+  const body = $('pickRows');
+  body.textContent = '';
+  state.runs.filter((r) => worldKey(r) === R.world).forEach((run) => body.appendChild(pickRow(run)));
+  syncPicker();
+}
+
+function pickRow(run) {
+  const tr = el('tr');
+  tr.dataset.id = run.id;
+  tr.title = `${run.id} · ${runName(run)}`;
+  const pick = el('td', 'c-pick');
+  const box = el('input');
+  box.type = 'checkbox';
+  box.setAttribute('aria-label', `${shortName(run)} seç`);
+  box.addEventListener('change', () => toggleRun(run.id));
+  pick.append(box, el('span', 'rnum'));
+  tr.appendChild(pick);
+  const date = el('td', 'c-date', shortDate(run.timestamp));
+  date.title = run.timestamp || '';
+  tr.appendChild(date);
+  tr.appendChild(el('td', 'scn', `S${run.scenario}`));
+  tr.appendChild(el('td', 'pvar', run.label));  // seçicide dar ekranda da görünür
+  const reached = run.goal_count !== null ? `${run.goals_reached}/${run.goal_count}` : '';
+  tr.appendChild(el('td', isSuccess(run) ? 'ok' : 'bad',
+    isSuccess(run) ? reached : `${reached} ${run.result || 'sonuç yok'}`.trim()));
+  tr.appendChild(el('td', 'num', fixed(run.duration_s, 1, ' s')));
+  tr.appendChild(el('td', 'num c-path', fixed(run.path_length_m, 2, ' m')));
+  tr.appendChild(el('td', 'c-rec rec', recordText(run)));
+  tr.addEventListener('click', (e) => {
+    if (e.target !== box) toggleRun(run.id);
+  });
+  return tr;
+}
+
+// Seçici satırlarını seçimle eşler (yeniden kurmadan).
+function syncPicker() {
+  const R = state.replay;
+  const ids = pickedRuns().map((r) => r.id);
+  const full = ids.length >= MAX_RUNS;
+  document.querySelectorAll('#pickRows tr').forEach((tr) => {
+    const id = tr.dataset.id;
+    const on = ids.includes(id);
+    tr.querySelector('input').checked = on;
+    tr.classList.toggle('on', on);
+    tr.classList.toggle('full', full && !on);
+    tr.setAttribute('aria-selected', String(on));
+    const num = tr.querySelector('.rnum');
+    num.replaceWith(on ? numBadge(id) : el('span', 'rnum'));
+  });
+  $('rpSelCount').textContent = `${ids.length} / ${MAX_RUNS} seçili`;
+  $('rpClear').disabled = !ids.length;
+  let msg = '';
+  if (!state.runsLoaded) msg = state.runsError || 'Yükleniyor…';
+  else if (!state.runs.length) msg = `Koşu bulunamadı: ${state.runsRoot}`;
+  else if (full) msg = `En çok ${MAX_RUNS} koşu; başka koşu için önce birini çıkar.`;
+  $('pickMsg').textContent = msg;
+  if (R.world === null) $('pickMsg').textContent = msg || 'Dünya seçilmedi';
+}
+
+// --- Yörüngeler ----------------------------------------------------------------------------
 
 function runPath(id) {
   return id.split('/').map(encodeURIComponent).join('/');
 }
 
-async function loadTrajectory(run) {
+function ensureTracks() {
+  pickedRuns().forEach(loadTrack);
+}
+
+async function loadTrack(run) {
   const R = state.replay;
-  if (R.traj[run.id] || R.errors[run.id] || R.pending[run.id]) return;
+  if (R.tracks[run.id] || R.errors[run.id] || R.pending[run.id]) return;
   if (!run.files.trajectory) {
-    R.errors[run.id] = 'Yörünge kaydı yok';
+    R.errors[run.id] = 'yörünge kaydı yok';
     return;
   }
   R.pending[run.id] = true;
   try {
-    R.traj[run.id] = (await getJson(`/api/runs/${runPath(run.id)}/trajectory`)).pts;
+    const pts = (await getJson(`/api/runs/${runPath(run.id)}/trajectory`)).pts;
+    R.tracks[run.id] = buildTrack(run, pts);
   } catch (e) {
     R.errors[run.id] = e.message;
   } finally {
     delete R.pending[run.id];
   }
-  if (R.id === run.id) {
-    renderReplay();
-    redraw();
+  if (pickedIds().includes(run.id)) renderReplayAll(false);
+}
+
+// Yörüngeden türetilenler: birikimli yol, hedeflerin bitiş anları (goals.csv sürelerinin birikimli
+// toplamı; hedefler ardışık gönderilir), hareket aralıkları (iki kayıt arası ≤ HOLD_GAP), en uzun
+// takılma ve duraklama. end: zaman ekseninin sonu (robot sonda dururken kayıt yazılmaz).
+function buildTrack(run, pts) {
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]));
   }
+  const goals = run.goals.slice().sort((a, b) => a.index - b.index);
+  let sum = 0;
+  const ends = goals.map((g) => (sum += g.duration_s || 0));
+  const last = pts.length ? pts[pts.length - 1][0] : 0;
+  const duration = run.duration_s !== null ? run.duration_s : last;
+  const end = Math.max(duration, last);
+  const moving = [];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1][0];
+    const b = pts[i][0];
+    if (b - a > HOLD_GAP) continue;
+    const m = moving[moving.length - 1];
+    if (m && m[1] >= a) m[1] = b;
+    else moving.push([a, b]);
+  }
+  return {run, pts, cum, ends, duration, end, moving,
+    results: goals.map((g) => g.result), recov: goals.map((g) => g.recoveries || 0),
+    stuck: longestDwell(pts, end), pause: longestPause(pts, end)};
+}
+
+// Takılma: robotun STUCK_RADIUS içinden çıkmadan kaldığı en uzun süre ve o noktaların ortası.
+// Dönerek, geri geri giderek kıpırdayan ama ilerleyemeyen robotu da yakalar.
+function longestDwell(pts, end) {
+  let best = {d: 0, x: 0, y: 0};
+  const r2 = STUCK_RADIUS * STUCK_RADIUS;
+  for (let i = 0; i < pts.length; i++) {
+    const [ti, xi, yi] = pts[i];
+    if (end - ti <= best.d) break;  // kalan süre en iyiyi geçemez
+    let j = i + 1;
+    let sx = xi;
+    let sy = yi;
+    while (j < pts.length && (pts[j][1] - xi) ** 2 + (pts[j][2] - yi) ** 2 <= r2) {
+      sx += pts[j][1];
+      sy += pts[j][2];
+      j++;
+    }
+    const d = (j < pts.length ? pts[j][0] : end) - ti;
+    if (d > best.d) best = {d, x: sx / (j - i), y: sy / (j - i)};
+  }
+  return best;
+}
+
+// Duraklama: ardışık iki kayıt arasındaki (ve son kayıttan sona kadarki) en uzun süre.
+function longestPause(pts, end) {
+  let best = {d: 0, x: 0, y: 0};
+  pts.forEach((p, i) => {
+    const d = (i + 1 < pts.length ? pts[i + 1][0] : end) - p[0];
+    if (d > best.d) best = {d, x: p[1], y: p[2]};
+  });
+  return best;
+}
+
+// Koşunun t anındaki hali: konum (ara değerli), yön, hareketsizlik süresi, o ana kadarki yol.
+function sample(tr, t) {
+  const p = tr.pts;
+  const n = p.length;
+  if (!n) return {x: 0, y: 0, th: null, hold: 0, dist: 0, i: 0};
+  let lo = 0;
+  let hi = n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (p[mid][0] <= t) lo = mid;
+    else hi = mid - 1;
+  }
+  const i = lo;
+  const a = p[i];
+  const b = p[i + 1];
+  if (!b || b[0] - a[0] > HOLD_GAP) {
+    return {x: a[1], y: a[2], th: heading(p, i), hold: Math.max(0, t - a[0]), dist: tr.cum[i], i};
+  }
+  const gap = b[0] - a[0];
+  const u = gap > 0 ? Math.min(1, Math.max(0, (t - a[0]) / gap)) : 1;
+  return {x: a[1] + (b[1] - a[1]) * u, y: a[2] + (b[2] - a[2]) * u, th: heading(p, i + 1), hold: 0,
+    dist: tr.cum[i] + (tr.cum[i + 1] - tr.cum[i]) * u, i};
+}
+
+// Hareket yönü: son anlamlı hareketten (2 cm'den kısa adımlar atlanır); hareket yoksa null.
+function heading(pts, i) {
+  const [, x, y] = pts[i];
+  for (let j = i - 1; j >= 0; j--) {
+    const dx = x - pts[j][1];
+    const dy = y - pts[j][2];
+    if (dx * dx + dy * dy >= 0.02 * 0.02) return Math.atan2(dy, dx);
+  }
+  return null;
+}
+
+// Koşu kartındaki anlık durum: [metin, sınıf]. Sıra taslaktaki gibi: bitti, az önce biten hedefin
+// sonucu, uzun hareketsizlik, yürütülen hedef.
+function runStatus(tr, s, t) {
+  const n = tr.run.goal_count || tr.results.length;
+  if (t >= tr.duration) {
+    const ok = tr.results.filter((r) => r === 'SUCCEEDED').length;
+    return [`Bitti · ${ok}/${n} hedef`, ok === n ? 'ok' : 'bad'];
+  }
+  for (let k = 0; k < tr.ends.length; k++) {
+    if (tr.ends[k] <= t && t - tr.ends[k] < RESULT_HOLD) {
+      const r = tr.results[k] || 'sonuç yok';
+      const rec = tr.recov[k] ? ` · ${tr.recov[k]} kurtarma` : '';
+      return [`Hedef ${k + 1}: ${r}${rec}`, r === 'SUCCEEDED' ? 'ok' : 'bad'];
+    }
+  }
+  if (s.hold > HOLD_RING) return [`Hareketsiz · ${Math.round(s.hold)} s`, 'warn'];
+  const gi = tr.ends.findIndex((e) => t < e);
+  return [gi >= 0 ? `Hedef ${gi + 1} yolunda` : 'Yolda', ''];
+}
+
+// --- Koşu kartları ve fark ------------------------------------------------------------------
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const ICONS = {
+  eye: ['M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z', 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z'],
+  eyeOff: ['M3 3l18 18', 'M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3 4',
+    'M6.6 6.6C3.9 8.4 2 12 2 12s3.5 7 10 7a10 10 0 0 0 5.4-1.6', 'M9.9 9.9a3 3 0 0 0 4.2 4.2'],
+  close: ['M6 6l12 12', 'M18 6L6 18'],
+  play: ['M8 5v14l11-7z'],
+  pause: ['M8 5v14', 'M16 5v14'],
+};
+
+function icon(name, svg) {
+  svg = svg || document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', 'icon');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.textContent = '';
+  ICONS[name].forEach((d) => {
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', d);
+    svg.appendChild(path);
+  });
+  return svg;
+}
+
+function iconButton(name, label) {
+  const b = el('button', 'iconbtn');
+  b.type = 'button';
+  b.setAttribute('aria-label', label);
+  b.title = label;
+  b.appendChild(icon(name));
+  return b;
+}
+
+function renderCards() {
+  const R = state.replay;
+  const box = $('rpCards');
+  box.textContent = '';
+  const runs = pickedRuns();
+  runs.forEach((run) => {
+    const card = el('div', 'rcard' + (R.hidden[run.id] ? ' off' : ''));
+    card.dataset.id = run.id;
+    const top = el('div', 'rtop');
+    const name = el('span', 'rname', shortName(run));
+    name.title = `${run.id} · ${runName(run)}` +
+      (run.timestamp ? ` · ${run.timestamp.replace('T', ' ')}` : '');
+    const eye = iconButton(R.hidden[run.id] ? 'eyeOff' : 'eye', R.hidden[run.id] ? 'Göster' : 'Gizle');
+    eye.addEventListener('click', () => {
+      R.hidden[run.id] = !R.hidden[run.id];
+      const off = R.hidden[run.id];
+      card.classList.toggle('off', off);
+      icon(off ? 'eyeOff' : 'eye', eye.firstChild);
+      eye.setAttribute('aria-label', off ? 'Göster' : 'Gizle');
+      eye.title = off ? 'Göster' : 'Gizle';
+      renderFrame();
+    });
+    const remove = iconButton('close', 'Seçimden çıkar');
+    remove.addEventListener('click', () => toggleRun(run.id));
+    top.append(numBadge(run.id), name, eye, remove);
+    card.append(top, el('p', 'rstat', '–'), el('p', 'rmet', ''));
+    box.appendChild(card);
+  });
+  $('rpEmpty').style.display = runs.length ? 'none' : '';
+  $('rpCount').textContent = runs.length ? `${runs.length} / ${MAX_RUNS}` : '';
+  updateCards();
+}
+
+function setText(e, text) {
+  if (e.textContent !== text) e.textContent = text;
+}
+
+// Kartlardaki anlık durum ve o ana kadarki yol ile kurtarma (oynarken her karede).
+function updateCards() {
+  const R = state.replay;
+  document.querySelectorAll('#rpCards .rcard').forEach((card) => {
+    const id = card.dataset.id;
+    const tr = R.tracks[id];
+    const [stat, met] = [card.children[1], card.children[2]];
+    let text = R.errors[id] || 'yörünge yükleniyor…';
+    let cls = '';
+    let metric = '';
+    if (tr) {
+      const s = sample(tr, R.t);
+      [text, cls] = runStatus(tr, s, R.t);
+      const rec = tr.ends.reduce((acc, e, k) => acc + (e <= R.t ? tr.recov[k] : 0), 0);
+      metric = `yol ${s.dist.toFixed(2)} m · kurtarma ${rec}`;
+    }
+    setText(stat, text);
+    const name = 'rstat' + (cls ? ' ' + cls : '');
+    if (stat.className !== name) stat.className = name;
+    setText(met, metric);
+  });
+}
+
+// a − b işaretiyle; değerlerden biri yoksa '–'.
+function delta(a, b, digits) {
+  if (a === null || b === null) return '–';
+  const v = a - b;
+  const sign = v > 0 ? '+' : v < 0 ? '−' : '±';
+  return `${sign}${Math.abs(v).toFixed(digits)}`;
+}
+
+// Fark kutusu: veriden üretilir. Her koşu için en uzun takılma (yeri ve süresi) ya da duraklama,
+// başarısız hedefler; iki ve daha çok koşuda süre ve yol farkı (ilk numaraya göre).
+function renderDiff() {
+  const R = state.replay;
+  const list = $('rpDiff');
+  list.textContent = '';
+  const runs = pickedRuns();
+  $('diffCard').style.display = state.mode === 'replay' && runs.length ? '' : 'none';
+  const tracks = runs.map((r) => R.tracks[r.id]).filter(Boolean);
+  const item = (...parts) => {
+    const li = el('li');
+    parts.forEach((p) => li.append(typeof p === 'string' ? p : numBadge(p.id)));
+    list.appendChild(li);
+  };
+  if (runs.length && !tracks.length) item('Yörüngeler yükleniyor…');
+  tracks.forEach((tr) => {
+    const {stuck, pause} = tr;
+    let text = ` takılmadan ilerledi; en uzun duraklama ${Math.round(pause.d)} s`;
+    if (stuck.d >= STUCK_MIN) {
+      text = ` (${stuck.x.toFixed(1)}, ${stuck.y.toFixed(1)}) yakınında ${Math.round(stuck.d)} s takıldı`;
+    } else if (pause.d <= HOLD_GAP) {
+      text = ' takılmadan, duraksamadan ilerledi';
+    }
+    const failed = tr.run.goals.filter((g) => g.result !== 'SUCCEEDED').map((g) =>
+      `hedef ${g.index} ${g.result}` + (g.recoveries ? ` (${g.recoveries} kurtarma)` : ''));
+    if (failed.length) text += `; ${failed.join(', ')}`;
+    item({id: tr.run.id}, text);
+  });
+  if (tracks.length >= 2) {
+    const ref = tracks[0].run;
+    const parts = ['Süre ve yol farkı, ', {id: ref.id}, ' numaraya göre:'];
+    tracks.slice(1).forEach((tr, k) => {
+      const r = tr.run;
+      parts.push(k ? ' · ' : ' ', {id: r.id}, ` ${delta(r.duration_s, ref.duration_s, 1)} s, ` +
+        `${delta(r.path_length_m, ref.path_length_m, 2)} m`);
+    });
+    item(...parts);
+  } else if (tracks.length === 1) {
+    const r = tracks[0].run;
+    item(`Süre ${fixed(r.duration_s, 1, ' s')}, yol ${fixed(r.path_length_m, 2, ' m')}, verim ` +
+      `${fixed(r.path_efficiency, 2, '')}, en yakın engel ${fixed(r.min_obstacle_dist_m, 2, ' m')}, ` +
+      `${r.recoveries === null ? '–' : r.recoveries} kurtarma`);
+  }
+}
+
+// --- Oynatıcı ------------------------------------------------------------------------------
+
+// Zaman ekseninin sonu: seçili koşuların en uzunu, 10 s'ye yuvarlanmış.
+function timeMax() {
+  const R = state.replay;
+  let m = 0;
+  pickedRuns().forEach((r) => {
+    const tr = R.tracks[r.id];
+    m = Math.max(m, tr ? tr.end : r.duration_s || 0);
+  });
+  return Math.max(10, Math.ceil(m / 10) * 10);
+}
+
+let playRaf = 0;
+let playLast = 0;
+
+function play() {
+  const R = state.replay;
+  if (!pickedRuns().length) return;
+  if (R.t >= timeMax()) R.t = 0;
+  R.playing = true;
+  playLast = performance.now();
+  if (!playRaf) playRaf = requestAnimationFrame(playTick);
+  renderPlayButton();
+}
+
+function pause() {
+  state.replay.playing = false;
+  if (playRaf) cancelAnimationFrame(playRaf);
+  playRaf = 0;
+  renderPlayButton();
+}
+
+function playTick(now) {
+  playRaf = 0;
+  const R = state.replay;
+  if (!R.playing) return;
+  const dt = Math.min((now - playLast) / 1000, 0.1);  // sekme arka plandayken sıçramasın
+  playLast = now;
+  const tmax = timeMax();
+  R.t = Math.min(tmax, R.t + dt * R.speed);
+  if (R.t >= tmax) pause();
+  renderFrame();
+  if (R.playing) playRaf = requestAnimationFrame(playTick);
+}
+
+function seek(t) {
+  state.replay.t = Math.max(0, Math.min(timeMax(), t));
+  renderFrame();
+}
+
+function setSpeed(s) {
+  state.replay.speed = s;
+  store('panel.replay.speed', String(s));
+  renderSpeeds();
+}
+
+function renderSpeeds() {
+  const box = $('rpSpeeds');
+  if (!box.childElementCount) {
+    SPEEDS.forEach((s) => {
+      const chip = el('button', 'chip', `${s}×`);
+      chip.type = 'button';
+      chip.dataset.s = String(s);
+      chip.addEventListener('click', () => setSpeed(s));
+      box.appendChild(chip);
+    });
+  }
+  box.querySelectorAll('button').forEach((b) => {
+    const on = Number(b.dataset.s) === state.replay.speed;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+}
+
+function renderPlayButton() {
+  const playing = state.replay.playing;
+  setText($('rpPlayText'), playing ? 'Duraklat' : 'Oynat');
+  icon(playing ? 'pause' : 'play', $('rpPlayIcon'));
+  const none = !pickedRuns().length;
+  $('rpPlay').disabled = none;
+  $('rpBack').disabled = none;
+}
+
+// Bir kare: harita, zaman çizelgesi, kartlar ve süre (yalnızca tekrar oynatma modunda).
+function renderFrame() {
+  if (state.mode !== 'replay') return;
+  drawMap();
+  drawTimeline();
+  updateCards();
+  setText($('rpTime'), `${state.replay.t.toFixed(1)} s / ${timeMax()} s`);
+}
+
+// --- Zaman çizelgesi -----------------------------------------------------------------------
+
+// Yükseklik koşu sayısına göre; etiket sütununun genişliği en uzun kısa addan.
+function sizeTimeline() {
+  const runs = pickedRuns();
+  const cv = $('tl');
+  cv.style.height = `${TL.top + Math.max(1, runs.length) * TL.row + TL.axis}px`;
+  const x = cv.getContext('2d');
+  x.font = `12px ${getComputedStyle(document.body).fontFamily}`;
+  state.replay.labelW = Math.max(0, ...runs.map((r) => x.measureText(shortName(r)).width));
+}
+
+function tlGeometry(W) {
+  const L0 = Math.round(Math.min(state.replay.labelW + 34, W * 0.4));
+  return {L0, R0: W - TL.pad};
+}
+
+function fitText(x, text, X, Y, maxW) {
+  if (maxW <= 8) return;
+  let s = text;
+  if (x.measureText(s).width > maxW) {
+    while (s.length > 1 && x.measureText(s + '…').width > maxW) s = s.slice(0, -1);
+    s += '…';
+  }
+  x.fillText(s, X, Y);
+}
+
+function drawTimeline() {
+  const cv = $('tl');
+  const W = cv.clientWidth;
+  const H = cv.clientHeight;
+  if (!W || !H) return;
+  const dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
+    cv.width = Math.round(W * dpr);
+    cv.height = Math.round(H * dpr);
+  }
+  const x = cv.getContext('2d');
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  x.clearRect(0, 0, W, H);
+  const R = state.replay;
+  const runs = pickedRuns();
+  const font = getComputedStyle(document.body).fontFamily;
+  const ink = {primary: cssVar('--text-primary'), secondary: cssVar('--text-secondary'),
+    muted: cssVar('--text-muted'), bad: cssVar('--map-bad')};
+  x.font = `12px ${font}`;
+  x.textBaseline = 'middle';
+  if (!runs.length) {
+    x.fillStyle = ink.secondary;
+    x.fillText('Koşu seçilmedi', 4, H / 2);
+    return;
+  }
+  const tmax = timeMax();
+  const g = tlGeometry(W);
+  const sx = (t) => g.L0 + (g.R0 - g.L0) * t / tmax;
+  runs.forEach((run, r) => {
+    const y = TL.top + r * TL.row;
+    const cy = y + TL.row / 2;
+    const tr = R.tracks[run.id];
+    const color = cssVar(`--run-${R.colors[run.id] + 1}`);
+    const base = R.hidden[run.id] ? 0.35 : 1;
+    x.globalAlpha = base;
+    // Etiket: renk noktası, numara ve kısa ad; metin metin renginde, renk yalnızca noktada.
+    x.fillStyle = color;
+    x.beginPath();
+    x.arc(6, cy, 4.5, 0, 2 * Math.PI);
+    x.fill();
+    x.fillStyle = ink.primary;
+    x.fillText(String(R.colors[run.id] + 1), 14, cy);
+    x.fillStyle = ink.secondary;
+    fitText(x, shortName(run), 26, cy, g.L0 - 32);
+    if (tr) {
+      x.fillStyle = color;
+      x.globalAlpha = base * 0.22;  // koşu süresi boyunca soluk bant: hareketsiz aralıklar
+      x.fillRect(sx(0), y + 6, sx(tr.duration) - sx(0), TL.row - 12);
+      x.globalAlpha = base;
+      tr.moving.forEach(([a, b]) => x.fillRect(sx(a), y + 6, Math.max(1, sx(b) - sx(a)), TL.row - 12));
+      tr.ends.forEach((e, k) => {
+        x.fillStyle = tr.results[k] === 'SUCCEEDED' ? ink.primary : ink.bad;
+        x.fillRect(sx(e) - 1, y + 2, 2, TL.row - 4);
+      });
+    }
+    x.globalAlpha = 1;
+  });
+  // Eksen: en çok 8 aralık
+  const ay = TL.top + runs.length * TL.row + 2;
+  const step = [5, 10, 15, 30, 60, 120, 300].find((s) => tmax / s <= 8) || 600;
+  x.fillStyle = ink.muted;
+  x.font = `11px ${font}`;
+  x.textBaseline = 'top';
+  for (let t = 0; t <= tmax; t += step) {
+    const X = sx(t);
+    x.fillRect(X, ay, 1, 4);
+    x.textAlign = t === 0 ? 'left' : X > g.R0 - 16 ? 'right' : 'center';
+    x.fillText(`${t} s`, X, ay + 6);
+  }
+  // Fare altındaki an ve oynatma imleci
+  if (R.hoverT !== null && !R.dragging) {
+    const X = sx(R.hoverT);
+    x.globalAlpha = 0.5;
+    x.fillRect(X, 0, 1, ay);
+    x.globalAlpha = 1;
+    x.textAlign = X > g.R0 - 40 ? 'right' : 'left';
+    x.fillText(`${R.hoverT.toFixed(1)} s`, X + (X > g.R0 - 40 ? -4 : 4), 0);
+  }
+  x.textAlign = 'left';
+  x.fillStyle = ink.primary;
+  x.fillRect(sx(R.t) - 1, 0, 2, ay + 2);
+}
+
+function timelineTime(e) {
+  const cv = $('tl');
+  const r = cv.getBoundingClientRect();
+  const g = tlGeometry(cv.clientWidth);
+  const tmax = timeMax();
+  return Math.max(0, Math.min(tmax, (e.clientX - r.left - g.L0) / (g.R0 - g.L0) * tmax));
+}
+
+// --- Harita (tekrar oynatma) ---------------------------------------------------------------
+
+// Dünyası bilinmeyen koşularda sınır kutusu yörüngelerden ve hedeflerden.
+function extentOf(tracks, goals) {
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+  const add = (x, y) => {
+    x0 = Math.min(x0, x);
+    y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x);
+    y1 = Math.max(y1, y);
+  };
+  tracks.forEach((tr) => tr.pts.forEach((p) => add(p[1], p[2])));
+  goals.forEach((gl) => add(gl[0], gl[1]));
+  return x0 === Infinity ? null : [x0 - 0.5, y0 - 0.5, x1 + 0.5, y1 + 0.5];
 }
 
 // Koşunun hedefleri: konum goals.csv'den (yoksa senaryodan), sonuç goals.csv'den.
@@ -898,122 +1661,110 @@ function runGoals(run) {
   return {goals, results};
 }
 
-function renderReplay() {
-  const run = selectedRun();
-  const badge = $('rpBadge');
-  const bars = $('rpBars');
-  const sum = $('rpSummary');
-  bars.textContent = '';
-  sum.textContent = '';
-  if (!run) {
-    const missing = Boolean(state.replay.id) && state.runsLoaded;
-    badge.textContent = missing ? 'Bulunamadı' : 'Koşu seçilmedi';
-    badge.className = 'badge neutral';
-    $('rpScn').textContent = '';
-    $('rpLine').textContent = missing ? `${state.replay.id} listede yok`
-      : 'Geçmiş koşular tablosundan bir koşu seç';
-    $('rpMsg').textContent = '';
-    return;
-  }
-  if (state.mode === 'replay') loadTrajectory(run);
-  const ok = isSuccess(run);
-  badge.textContent = ok ? 'Başarılı' : run.result || 'Sonuç yok';
-  badge.className = 'badge ' + (ok ? 'ok' : 'bad');
-  $('rpScn').textContent = `S${run.scenario} · ${run.label}`;
-  $('rpLine').textContent = runName(run);
-  runGoals(run).results.forEach((r) => {
-    bars.appendChild(el('span', r === 'SUCCEEDED' ? 'ok' : r ? 'bad' : ''));
-  });
-  const rows = [
-    ['Hedef', run.goal_count !== null ? `${run.goals_reached}/${run.goal_count}` : '–'],
-    ['Süre (sim)', fixed(run.duration_s, 1, ' s')], ['Yol', fixed(run.path_length_m, 2, ' m')],
-    ['Verim', fixed(run.path_efficiency, 2, '')],
-    ['En yakın engel', fixed(run.min_obstacle_dist_m, 2, ' m')],
-    ['Kurtarma', run.recoveries === null ? '–' : String(run.recoveries)],
-  ];
-  if (run.failure_reason) rows.push(['Neden', run.failure_reason]);
-  rows.push(['Tarih', run.timestamp ? run.timestamp.replace('T', ' ') : '–'], ['Kimlik', run.id]);
-  rows.forEach(([k, v]) => {
-    sum.appendChild(el('dt', '', k));
-    sum.appendChild(el('dd', '', v));
-  });
+// Seçili koşular t anında: dünya, hareketli kutuların şeritleri, hedefler, her koşunun o ana kadarki
+// izi ve hayalet robotu (numaralı); 4 s'den uzun hareketsizlikte robotun çevresinde halka (oynarken
+// yanıp söner). Tek koşu görünürken hedefler bittikleri andan itibaren sonucuyla renklenir.
+function drawReplay(cv) {
   const R = state.replay;
-  const kinds = [['trajectory', 'yörünge'], ['map', 'harita'], ['log', 'günlük'],
-    ['events', 'olay'], ['obstacles', 'engel'], ['replay', 'ayrıntılı']];
-  const have = kinds.filter(([k]) => run.files[k]).map(([, text]) => text);
-  let msg = `Kayıt: ${have.length ? have.join(', ') : 'yok'}`;
-  if (R.errors[run.id]) msg += ` · ${R.errors[run.id]}`;
-  else if (R.pending[run.id]) msg += ' · yörünge yükleniyor…';
-  else if (R.traj[run.id]) msg += ` · ${R.traj[run.id].length} nokta`;
-  $('rpMsg').textContent = msg;
-}
-
-// Hareket yönü: son anlamlı hareketten (2 cm'den kısa adımlar atlanır); hareket yoksa null.
-function heading(pts, i) {
-  const [, x, y] = pts[i];
-  for (let j = i - 1; j >= 0; j--) {
-    const dx = x - pts[j][1];
-    const dy = y - pts[j][2];
-    if (dx * dx + dy * dy >= 0.02 * 0.02) return Math.atan2(dy, dx);
-  }
-  return null;
-}
-
-// Dünyası bilinmeyen koşuda sınır kutusu yörüngeden ve hedeflerden.
-function extentOf(pts, goals) {
-  const xs = [];
-  const ys = [];
-  (pts || []).forEach((p) => {
-    xs.push(p[1]);
-    ys.push(p[2]);
-  });
-  goals.forEach((g) => {
-    xs.push(g[0]);
-    ys.push(g[1]);
-  });
-  if (!xs.length) return null;
-  return [Math.min(...xs) - 0.5, Math.min(...ys) - 0.5, Math.max(...xs) + 0.5, Math.max(...ys) + 0.5];
-}
-
-// Seçili koşu: dünya, hareketli kutuların şeritleri, yörünge, hedefler (sonuç renkleriyle),
-// başlangıç halkası ve son konumdaki robot. Çizilecek bir şey yoksa null.
-function drawReplay(cv, run) {
   const bg = cssVar('--surface-1');
-  if (!run) return setupCanvas(cv, null, bg);
-  const R = state.replay;
-  const pts = R.traj[run.id] || null;
-  const geometry = run.world ? state.worlds[run.world] : null;
-  const s = scenarioById(run.scenario);
-  const {goals, results} = runGoals(run);
-  const bounds = geometry ? geometry.bounds : extentOf(pts, goals);
+  const runs = pickedRuns();
+  if (!runs.length) return setupCanvas(cv, null, bg);
+  const geometry = R.world !== '?' ? state.worlds[R.world] : null;
+  const tracks = runs.map((r) => R.tracks[r.id]).filter(Boolean);
+  const shown = tracks.filter((tr) => !R.hidden[tr.run.id]);
+  const {goals} = runGoals(runs[0]);
+  const bounds = geometry ? geometry.bounds : extentOf(tracks, goals);
   const T = setupCanvas(cv, bounds, bg);
   if (!T) return null;
+  const t = R.t;
   drawGrid(T, bounds);
   if (geometry) {
     drawShapes(T, geometry, false, null);
-    if (s) drawLanes(T, geometry, s);  // konum kaydı yok (P8): şerit
+    const mover = runs.map((r) => scenarioById(r.scenario)).find((s) => s && s.moving_obstacles.length);
+    if (mover) drawLanes(T, geometry, mover);  // konum kaydı yok (P8)
   }
-  if (pts) drawLine(T, pts.map((p) => [p[1], p[2]]), cssVar('--map-path'), 2.5);
-  drawGoals(T, goals, results, null, true);
-  T.coord = R.errors[run.id] || '';
-  if (pts && pts.length) {
-    drawStart(T, pts[0][1], pts[0][2]);
-    const last = pts.length - 1;
-    const [t, x, y] = pts[last];
-    drawRobot(T, [x, y, heading(pts, last)], true);
-    T.coord = `son konum x ${x.toFixed(2)} · y ${y.toFixed(2)} · t ${t.toFixed(1)} s`;
+  let results = [];
+  let current = null;
+  if (shown.length === 1) {
+    const tr = shown[0];
+    results = tr.results.map((r, k) => (tr.ends[k] <= t ? r : null));
+    const gi = tr.ends.findIndex((e) => t < e);
+    current = gi >= 0 && t < tr.duration ? gi + 1 : null;
   }
+  drawGoals(T, goals, results, current, true);
+  if (tracks.length && tracks[0].pts.length) {
+    drawStart(T, tracks[0].pts[0][1], tracks[0].pts[0][2], cssVar('--text-muted'));
+  }
+  const samples = shown.map((tr) => [tr, sample(tr, t), cssVar(`--run-${R.colors[tr.run.id] + 1}`)]);
+  samples.forEach(([tr, s, color]) => drawTrail(T, tr.pts, s, color));
+  const phase = R.playing ? (performance.now() / 700) % 1 : 0.4;
+  samples.forEach(([tr, s, color]) => {
+    if (s.hold > HOLD_RING && t < tr.duration) drawHoldRing(T, s, color, phase);
+    drawRobot(T, [s.x, s.y, s.th], true, color);
+    drawTag(T, s.x, s.y, R.colors[tr.run.id]);
+  });
+  T.coord = `t = ${t.toFixed(1)} s`;
   return T;
 }
 
-function drawStart(T, px, py) {
+function drawStart(T, px, py, color) {
   const x = T.x;
   x.save();
-  x.strokeStyle = cssVar('--map-robot');
+  x.strokeStyle = color;
   x.lineWidth = 1.5;
   x.beginPath();
   x.arc(T.X(px), T.Y(py), Math.max(0.105 * T.k, 5), 0, 2 * Math.PI);
   x.stroke();
+  x.restore();
+}
+
+function drawTrail(T, pts, s, color) {
+  if (!pts.length) return;
+  const x = T.x;
+  x.save();
+  x.strokeStyle = color;
+  x.globalAlpha = 0.85;
+  x.lineWidth = 2.5;
+  x.lineJoin = 'round';
+  x.lineCap = 'round';
+  x.beginPath();
+  x.moveTo(T.X(pts[0][1]), T.Y(pts[0][2]));
+  for (let i = 1; i <= s.i; i++) x.lineTo(T.X(pts[i][1]), T.Y(pts[i][2]));
+  x.lineTo(T.X(s.x), T.Y(s.y));
+  x.stroke();
+  x.restore();
+}
+
+function drawHoldRing(T, s, color, phase) {
+  const x = T.x;
+  x.save();
+  x.strokeStyle = color;
+  x.lineWidth = 2;
+  x.globalAlpha = 1 - 0.8 * phase;
+  x.beginPath();
+  x.arc(T.X(s.x), T.Y(s.y), (0.15 + 0.4 * phase) * T.k, 0, 2 * Math.PI);
+  x.stroke();
+  x.restore();
+}
+
+// Robotun numarası: metin renginde, zemin renginde haleyle; aynı noktadaki robotların etiketleri
+// üst üste binmesin diye her numara robotun çevresinde ayrı yöne konur.
+function drawTag(T, px, py, slot) {
+  const x = T.x;
+  const a = -Math.PI / 4 + slot * (Math.PI / 3);
+  const r = Math.max(0.105 * T.k, 6) + 8;
+  const X = T.X(px) + Math.cos(a) * r;
+  const Y = T.Y(py) - Math.sin(a) * r;
+  x.save();
+  x.font = `600 12px ${getComputedStyle(document.body).fontFamily}`;
+  x.textAlign = 'center';
+  x.textBaseline = 'middle';
+  x.lineWidth = 3;
+  x.lineJoin = 'round';
+  x.strokeStyle = cssVar('--surface-1');
+  x.strokeText(String(slot + 1), X, Y);
+  x.fillStyle = cssVar('--text-primary');
+  x.fillText(String(slot + 1), X, Y);
   x.restore();
 }
 
@@ -1202,11 +1953,12 @@ function drawGoals(T, goals, results, current, detailed) {
 }
 
 // Robot: th null ise yalnızca doğduğu nokta, değilse yönünü gösteren çizgiyle canlı konum.
-function drawRobot(T, [px, py, th], detailed) {
+// color: tekrar oynatmada koşunun rengi (varsayılan robot rengi).
+function drawRobot(T, [px, py, th], detailed, color) {
   const x = T.x;
   const live = th !== null;
   const rr = Math.max(0.105 * T.k, detailed ? (live ? 6 : 5) : 3);
-  x.fillStyle = cssVar('--map-robot');
+  x.fillStyle = color || cssVar('--map-robot');
   x.beginPath();
   x.arc(T.X(px), T.Y(py), rr, 0, 2 * Math.PI);
   x.fill();
@@ -1229,9 +1981,10 @@ function drawMap() {
   let kind = 'none';
   let coord = '';
   if (state.mode === 'replay') {
-    view = drawReplay(cv, selectedRun());
+    view = drawReplay(cv);
     if (view) {
-      kind = 'replay';
+      const shown = pickedRuns().filter((r) => !state.replay.hidden[r.id]).length;
+      kind = shown === 1 ? 'replay1' : 'replay';
       coord = view.coord;
     }
   } else {
@@ -1249,9 +2002,9 @@ function drawMap() {
 }
 
 function emptyText() {
-  const run = state.mode === 'replay' ? selectedRun() : null;
-  if (!run) return MODES[state.mode].empty;
-  return state.replay.errors[run.id] || 'Yörünge yükleniyor…';
+  const runs = state.mode === 'replay' ? pickedRuns() : [];
+  if (!runs.length) return MODES[state.mode].empty;
+  return runs.map((r) => state.replay.errors[r.id]).find(Boolean) || 'Yörünge yükleniyor…';
 }
 
 function drawEmpty(cv, text) {
@@ -1281,7 +2034,8 @@ function redraw() {
 function renderMapInfo(key) {
   if (key === state.legendKey) return;
   state.legendKey = key;
-  $('hint').textContent = {live: LIVE_HINT, replay: REPLAY_HINT}[key] || MODES[state.mode].hint;
+  $('hint').textContent = {live: LIVE_HINT, replay: REPLAY_HINT, replay1: REPLAY_HINT}[key] ||
+    MODES[state.mode].hint;
   const box = $('legend');
   box.textContent = '';
   box.style.display = key === 'none' ? 'none' : '';
@@ -1314,14 +2068,22 @@ function setMode(mode) {
   });
   const replay = mode === 'replay';
   $('liveTop').style.display = mode === 'live' ? '' : 'none';
+  $('replayTop').style.display = replay ? '' : 'none';
+  $('playbar').style.display = replay ? '' : 'none';
+  $('tlBox').style.display = replay ? '' : 'none';
   $('runCard').style.display = replay ? 'none' : '';
   $('metrics').style.display = replay ? 'none' : '';
   $('replayCard').style.display = replay ? '' : 'none';
-  $('history').style.display = mode === 'edit' ? 'none' : '';
+  // Tekrar oynatmada koşu seçici geçmiş koşular tablosunun yerini alır.
+  $('history').style.display = mode === 'live' ? '' : 'none';
   $('mapTitle').textContent = MODES[mode].title;
   state.legendKey = '';  // açıklama yeni moda göre yeniden yazılsın
   store('panel.mode', mode);
-  if (replay) renderReplay();  // seçili koşunun yörüngesi gerekirse yüklenir
+  if (replay) renderReplayAll();  // seçili koşuların yörüngeleri gerekirse yüklenir
+  else {
+    pause();
+    $('diffCard').style.display = 'none';
+  }
   drawMap();
   renderMetrics();
   if (mode === 'live') drawPreviews();  // gizliyken çizilen önizlemeler boş kalır
@@ -1331,6 +2093,7 @@ function onTheme() {
   if (state.live.mapImg) state.live.mapCanvas = recolorMap(state.live.mapImg);
   drawMap();
   drawPreviews();
+  renderFrame();  // tuvallerin renkleri çizerken okunur; kartlar CSS değişkeni kullanıyor
 }
 
 // --- Başlangıç -----------------------------------------------------------------------------
@@ -1356,10 +2119,54 @@ $('histReload').addEventListener('click', () => {
   state.replay.errors = {};  // okunamayan yörüngeler yeniden denensin
   loadRuns();
 });
+$('rpPlay').addEventListener('click', () => (state.replay.playing ? pause() : play()));
+$('rpBack').addEventListener('click', () => {
+  pause();
+  seek(0);
+});
+$('rpClear').addEventListener('click', () => {
+  pickedIds().slice().forEach(dropRun);
+  saveReplay();
+  renderReplayAll(false);
+});
+const timeline = $('tl');
+timeline.addEventListener('pointerdown', (e) => {
+  timeline.setPointerCapture(e.pointerId);
+  state.replay.dragging = true;
+  seek(timelineTime(e));
+});
+timeline.addEventListener('pointermove', (e) => {
+  if (state.replay.dragging) {
+    seek(timelineTime(e));
+  } else {
+    state.replay.hoverT = timelineTime(e);
+    drawTimeline();
+  }
+});
+timeline.addEventListener('pointerup', () => {
+  state.replay.dragging = false;
+});
+timeline.addEventListener('pointerleave', () => {
+  state.replay.hoverT = null;
+  drawTimeline();
+});
+timeline.addEventListener('keydown', (e) => {
+  const step = e.shiftKey ? 10 : 1;
+  const keys = {ArrowLeft: -step, ArrowRight: step};
+  if (e.key in keys) seek(state.replay.t + keys[e.key]);
+  else if (e.key === 'Home') seek(0);
+  else if (e.key === 'End') seek(timeMax());
+  else if (e.key === ' ') state.replay.playing ? pause() : play();
+  else return;
+  e.preventDefault();
+});
 new ResizeObserver(() => {
   drawMap();
   drawPreviews();
 }).observe($('map'));
+new ResizeObserver(() => {
+  if (state.mode === 'replay') drawTimeline();
+}).observe(timeline);
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', onTheme);
 
 // Bağlantı açık görünse de veri kesildiyse (asılı bağlantı) yeniden bağlan. Geçen süre, bayat
@@ -1379,7 +2186,8 @@ setInterval(refreshHealth, HEALTH_MS);
 
 state.filter.world = restore('panel.runs.world') || '';
 state.filter.result = ['ok', 'bad'].includes(restore('panel.runs.result')) ? restore('panel.runs.result') : '';
-state.replay.id = restore('panel.replay');
+restoreReplay();
+renderSpeeds();
 renderRun();
 renderControls();
 renderMetrics();

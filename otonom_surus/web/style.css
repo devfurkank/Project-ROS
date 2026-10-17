@@ -32,6 +32,16 @@
   --map-free: #f0eee6;
   --map-slam: #44433f;
   --map-fog: rgba(138, 137, 132, 0.42);
+  /* Tekrar oynatmada koşu renkleri (sıra sabit). dataviz doğrulayıcısıyla haritanın yüzeyinde
+     (--surface-1) sınandı: komşu çiftler iki temada geçer, ilk üçü tüm çiftlerde ayrışır.
+     4–6 tüm çiftlerde ayrışmadığından kimlik renkle değil numarayla taşınır (robot etiketi,
+     kart, zaman çizelgesi). Açık temada 2, 5 ve 6 yüzeye 3:1'in altında: numara etiketi şart. */
+  --run-1: #2a78d6;
+  --run-2: #e87ba4;
+  --run-3: #008300;
+  --run-4: #6250d6;
+  --run-5: #eb6834;
+  --run-6: #1baf7a;
   --radius: 8px;
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
@@ -62,6 +72,12 @@
     --map-free: #262624;
     --map-slam: #d3d1c7;
     --map-fog: rgba(136, 135, 128, 0.32);
+    --run-1: #3987e5;
+    --run-2: #d55181;
+    --run-3: #008300;
+    --run-4: #9085e9;
+    --run-5: #d95926;
+    --run-6: #199e70;
     color-scheme: dark;
   }
 }
@@ -241,3 +257,43 @@ select:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 
 .histmsg:empty { display: none; }
 @media (max-width: 860px) { .runs .c-var, .runs .c-path, .runs .c-eff { display: none; } }
 @media (max-width: 520px) { .runs .c-date { display: none; } .runs td.task { min-width: 0; } }
+
+/* Tekrar oynatma: koşu seçici, oynatıcı, zaman çizelgesi, koşu kartları, fark */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.picker { max-height: 232px; margin-top: 10px; }
+.runs .c-pick { width: 56px; }
+.runs td.c-pick { padding-right: 0; }
+.runs tr.full td { opacity: 0.5; }
+.runs td.pvar { color: var(--text-secondary); white-space: normal; }
+.runs input[type="checkbox"] { margin: 0 6px 0 0; vertical-align: -2px; accent-color: var(--accent-fill); }
+.rnum { display: inline-flex; align-items: center; gap: 4px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+.rnum i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.rec { font-size: 12px; color: var(--text-secondary); }
+.chip:disabled { opacity: 0.45; cursor: default; }
+.playbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.playbar .chip { padding: 3px 9px; font-size: 12px; }
+#rpTime { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.tlbox { margin-top: 10px; }
+.tlbox .label { margin-bottom: 4px; }
+#tl { display: block; width: 100%; height: 60px; cursor: pointer; touch-action: none; border-radius: 6px; }
+#tl:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 2px; }
+.label.flat, .flat { margin: 0; }
+.rcards { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.rcards:empty { display: none; }
+.rcard { border: 0.5px solid var(--border); border-radius: var(--radius); padding: 6px 8px; }
+.rcard.off { opacity: 0.55; }
+.rtop { display: flex; align-items: center; gap: 6px; }
+.rname { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iconbtn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer;
+}
+.iconbtn:hover { background: var(--surface-1); color: var(--text-primary); }
+.iconbtn .icon { width: 15px; height: 15px; }
+.rstat { margin: 3px 0 0; font-size: 12px; color: var(--text-secondary); }
+.rstat.ok { color: var(--success-text); }
+.rstat.bad { color: var(--danger-text); }
+.rstat.warn { color: var(--warning-text); }
+.rmet { margin: 0; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.diff { margin: 0; padding-left: 16px; font-size: 13px; line-height: 1.55; }
+.diff li + li { margin-top: 4px; }
