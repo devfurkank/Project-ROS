@@ -85,8 +85,8 @@ class FakePanel:
     def api(self, method, path, body):
         if method == 'GET' and path == '/api/health':
             return 200, self.hello()
-        if path == '/api/echo':  # POST'ta gövde, GET'te sorgu parametreleri
-            return (201 if method == 'POST' else 200), body
+        if path == '/api/echo':  # POST ve DELETE'te gövde, GET'te sorgu parametreleri
+            return {'POST': 201, 'DELETE': 202}.get(method, 200), body
         if method == 'GET':
             return runs_route(self.index, path, body)
         return None
@@ -111,6 +111,12 @@ def server(tmp_path):
         encoding='utf-8')
     (runs / 'trajectories' / 's1_r1.csv').write_text(
         't,x,y\n0.0,0.0,0.0\n0.5,0.1,0.0\n1.0,0.2,0.0\n1.5,0.3,0.0\n')
+    (runs / 'events').mkdir()
+    (runs / 'events' / 's1_r1.jsonl').write_text(
+        '{"t": 0.8, "type": "spawn", "name": "panel_kutu_1", "x": 1.0, "y": 2.0}\n',
+        encoding='utf-8')
+    (runs / 'meta').mkdir()
+    (runs / 'meta' / 's1_r1.json').write_text('{"v": 1, "mode": "scenario"}', encoding='utf-8')
     srv = make_server(FakePanel(str(web), RunIndex(str(tmp_path / 'results'))), '127.0.0.1', 0)
     thread = threading.Thread(target=srv.serve_forever, kwargs={'poll_interval': 0.05})
     thread.start()
@@ -158,6 +164,9 @@ def test_http_post_govdesi(server):
     assert json.loads(r.read()) == {'görev': 2}
     r = request(server, 'POST', '/api/echo')  # boş gövde -> {}
     assert r.status == 201 and json.loads(r.read()) == {}
+    r = request(server, 'DELETE', '/api/echo', b'{"name": "panel_kutu_1"}')
+    assert r.status == 202 and json.loads(r.read()) == {'name': 'panel_kutu_1'}
+    assert request(server, 'DELETE', '/api/echo', b'{bozuk').status == 400
     for bad in (b'{bozuk', b'[1, 2]', b'\xff\xfe'):
         r = request(server, 'POST', '/api/echo', bad)
         assert r.status == 400, bad
@@ -193,6 +202,18 @@ def test_kosu_dizini_uclari(server):
 
     assert 'yörünge kaydı yok' in body(
         request(server, 'GET', '/api/runs/alt/s2_r2/trajectory'), 404)['error']
+
+    # Olay ve meta kaydı; olmayan koşu ve olmayan kayıt 404.
+    d = body(request(server, 'GET', '/api/runs/alt%2Fs1_r1/events'))
+    assert d == {'id': 'alt/s1_r1', 'events': [
+        {'t': 0.8, 'type': 'spawn', 'name': 'panel_kutu_1', 'x': 1.0, 'y': 2.0}]}
+    assert body(request(server, 'GET', '/api/runs/alt/s1_r1/meta')) == {'v': 1, 'mode': 'scenario'}
+    assert body(request(server, 'GET', '/api/runs/alt/s1_r1'))['mode'] == 'scenario'
+    assert 'olay kaydı yok' in body(
+        request(server, 'GET', '/api/runs/alt/s2_r2/events'), 404)['error']
+    assert 'meta kaydı yok' in body(
+        request(server, 'GET', '/api/runs/alt/s2_r2/meta'), 404)['error']
+    assert 'bulunamadı' in body(request(server, 'GET', '/api/runs/alt/s9/events'), 404)['error']
     for path in ('/api/runs/alt/s9_yok', '/api/runs/../gizli.txt/trajectory',
                  '/api/runs/alt/../../gizli.txt'):
         assert 'bulunamadı' in body(request(server, 'GET', path), 404)['error'], path

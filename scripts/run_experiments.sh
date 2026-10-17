@@ -16,9 +16,9 @@
 #
 # Senaryo N'nin I. koşusu:
 #   ros2 launch otonom_surus scenario.launch.py scenario:=N gui:=false rviz:=false \
-#       results_dir:=<klasör> run_id:=rI
+#       results_dir:=<klasör> run_id:=rI source:=run_experiments
 # Koşunun sonuçlarını mission_manager yazar (runs.csv, goals.csv, trajectories/sN_rI.csv,
-# maps/sN_rI.*). Betik ayrıca her denemeyi experiments.csv'ye, launch çıktısını logs/sN_rI.log'a
+# maps/sN_rI.*, meta/sN_rI.json). Betik ayrıca her denemeyi experiments.csv'ye, launch çıktısını logs/sN_rI.log'a
 # yazar. runs.csv'de satırı olan koşu atlanır: yarıda kalan deney aynı komutla kaldığı yerden
 # sürer.
 #
@@ -102,7 +102,8 @@ for s in "${scenarios[@]}"; do
     printf '[%d/%d] %s: ' "$n" "$total" "$tag"
     start=$(date +%s)
     timeout -s INT -k 60 "$limit" ros2 launch otonom_surus scenario.launch.py \
-      scenario:="$s" gui:=false rviz:=false results_dir:="$out" run_id:="$run" "${extra[@]}" \
+      scenario:="$s" gui:=false rviz:=false results_dir:="$out" run_id:="$run" \
+      source:=run_experiments "${extra[@]}" \
       > "$out/logs/$tag.log" 2>&1 &
     pid=$!
     wait "$pid"

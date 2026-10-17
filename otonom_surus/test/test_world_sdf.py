@@ -2,8 +2,9 @@
 
 import math
 import os
+import xml.etree.ElementTree as ET
 
-from otonom_surus.world_sdf import world_geometry, world_shapes
+from otonom_surus.world_sdf import box_sdf, world_geometry, world_shapes
 
 WORLDS = os.path.join(os.path.dirname(__file__), '..', 'worlds')
 
@@ -60,6 +61,23 @@ def test_sinirlar_odayi_kapsar_ve_json_turleri():
             assert isinstance(shape['size'], list) and len(shape['size']) == 2
         else:
             assert isinstance(shape['size'], float)
+
+
+def test_atilan_kutunun_sdfi_statik_ve_boyutu_dogru(tmp_path):
+    xml = box_sdf('panel_kutu_3', (0.4, 0.4, 0.5))
+    root = ET.fromstring(xml)  # geçerli XML
+    assert root.tag == 'sdf' and root.get('version') == '1.6'
+    [model] = root.findall('model')
+    assert model.get('name') == 'panel_kutu_3' and model.findtext('static') == 'true'
+    assert model.find('link/visual/geometry/box/size').text == '0.4 0.4 0.5'
+    assert model.find('link/visual/material/diffuse') is not None
+    # Dünya ayrıştırıcısı da aynı kutuyu görür (tekrar oynatma ve analiz tek ayrıştırıcıyla).
+    path = tmp_path / 'kutu.sdf'
+    path.write_text(xml)
+    [shape] = world_shapes(str(path))
+    assert (shape['model'], shape['static'], shape['kind'], shape['size']) == (
+        'panel_kutu_3', True, 'box', (0.4, 0.4))
+    assert (shape['x'], shape['y']) == (0.0, 0.0)  # konumu spawn_entity'nin initial_pose'u
 
 
 def test_bos_dunyanin_siniri_yok(tmp_path):

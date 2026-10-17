@@ -1,5 +1,5 @@
 """
-Gazebo .world (SDF) dosyalarından iki boyutlu geometri.
+Gazebo .world (SDF) dosyalarından iki boyutlu geometri ve panelin attığı kutunun SDF'i.
 
 scripts/analyze_results.py (yörünge ve harita çizimleri) ile web paneli (dünya kartları, harita)
 aynı ayrıştırıcıyı kullanır. ROS'a bağımlı değildir.
@@ -62,7 +62,7 @@ def shape_role(shape):
     return 'obstacle'
 
 
-def _half_extent(shape):
+def half_extent(shape):
     """Şeklin eksenlere hizalı yarı genişliği (dx, dy); dönük kutuda çevreleyen dikdörtgen."""
     if shape['kind'] == 'cylinder':
         return shape['size'], shape['size']
@@ -80,7 +80,7 @@ def world_geometry(path):
     """
     shapes, xs, ys = [], [], []
     for shape in world_shapes(path):
-        dx, dy = _half_extent(shape)
+        dx, dy = half_extent(shape)
         xs += [shape['x'] - dx, shape['x'] + dx]
         ys += [shape['y'] - dy, shape['y'] + dy]
         size = shape['size']
@@ -93,3 +93,27 @@ def world_geometry(path):
     if shapes:
         bounds = [round(min(xs), 3), round(min(ys), 3), round(max(xs), 3), round(max(ys), 3)]
     return {'shapes': shapes, 'bounds': bounds}
+
+
+def box_sdf(name, size, color=(0.85, 0.2, 0.55)):
+    """
+    Panelin Gazebo'ya attığı kutunun SDF'i (spawn_entity'nin xml alanı).
+
+    Kutu statiktir (PT11): robot çarpınca yerinden oynamaz, başka modeli itmez. Konumu ve
+    yüksekliği spawn_entity'nin initial_pose'u verir (merkezi zeminden size[2] / 2 yukarıda).
+    Rengi dünyadaki engellerden ayrışsın diye eflatun.
+    """
+    sdf = ET.Element('sdf', version='1.6')
+    model = ET.SubElement(sdf, 'model', name=name)
+    ET.SubElement(model, 'static').text = 'true'
+    link = ET.SubElement(model, 'link', name='link')
+    box = ' '.join(f'{v:g}' for v in size)
+    rgba = ' '.join(f'{v:g}' for v in (*color, 1))
+    for tag in ('collision', 'visual'):
+        part = ET.SubElement(link, tag, name=tag)
+        ET.SubElement(ET.SubElement(ET.SubElement(part, 'geometry'), 'box'), 'size').text = box
+        if tag == 'visual':
+            material = ET.SubElement(part, 'material')
+            ET.SubElement(material, 'ambient').text = rgba
+            ET.SubElement(material, 'diffuse').text = rgba
+    return ET.tostring(sdf, encoding='unicode')

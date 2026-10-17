@@ -43,8 +43,10 @@ def test_gurultu_ve_bicimsiz_satir_atilir():
 def test_komut_terminaldekiyle_ayni():
     assert scenario_command(2, True, False, '/r/panel', 'p1') == [
         'ros2', 'launch', 'otonom_surus', 'scenario.launch.py', 'scenario:=2', 'gui:=true',
-        'rviz:=false', 'results_dir:=/r/panel', 'run_id:=p1']
+        'rviz:=false', 'results_dir:=/r/panel', 'run_id:=p1', 'source:=panel']
     assert scenario_command(1, 0, 1, '/r', 'p2', '/s.yaml')[-1] == 'scenarios_file:=/s.yaml'
+    free = scenario_command(3, False, False, '/r', 'p3', mode='interactive')
+    assert free[3] == 'free.launch.py' and 'scenario:=3' in free
 
 
 def test_sonuc_satiri_bulunur(tmp_path):
@@ -106,7 +108,7 @@ def test_surec_bitince_grupta_kalan_oldurulur():
 
 def fake_launch(lines, csv_row=None, tail='exit 0'):
     """Sahte launch: mission_manager satırları basar, isteğe göre runs.csv'ye yazar."""
-    def command(scenario, gui, rviz, results_dir, run_id, scenarios_file):
+    def command(scenario, gui, rviz, results_dir, run_id, scenarios_file, mode):
         script = ''.join(f'echo {MM + line!r}; sleep 0.05; ' for line in lines)
         if csv_row is not None:
             row = csv_row.format(scenario=scenario, run_id=run_id)
@@ -136,9 +138,9 @@ class Events:
             return self.cond.wait_for(lambda: phase in self.phases(), timeout)
 
 
-def manager(tmp_path, events, command, gazebo=False):
+def manager(tmp_path, events, command, gazebo=False, **kwargs):
     return RunManager(str(tmp_path / 'panel'), events, command=command,
-                      gazebo_check=lambda: gazebo, leftover_grace=0.3)
+                      gazebo_check=lambda: gazebo, leftover_grace=0.3, **kwargs)
 
 
 def status(run_id, state, **fields):
@@ -229,6 +231,58 @@ def test_tek_kosu_kilidi_gazebo_denetimi_ve_durdurma(tmp_path):
     with pytest.raises(RunError, match='gzserver'):
         busy.start(1)
     assert busy.state() == {'phase': 'idle'}
+
+
+def test_serbest_surus_durdurulunca_bitirilir_ve_sonuc_yazilir(tmp_path):
+    # Sahte launch "finish" gelene kadar (dosya) bekler, sonra runs.csv'ye yazıp çıkar:
+    # mission_manager'ın bitir isteğiyle sonuçları yazması gibi.
+    events = Events()
+    finish = tmp_path / 'finish'
+    runs = manager(tmp_path, events, fake_launch(
+        [], csv_row='{scenario},{run_id},SUCCEEDED,2,2',
+        tail=f'while [ ! -e {finish} ]; do sleep 0.05; done; exit 0'),
+        on_finish=finish.touch)
+    rid = runs.start(1, mode='interactive')['run_id']
+    assert runs.state()['mode'] == 'interactive'
+    runs.on_status(status(rid, 'idle', goal_count=0))
+    st = runs.state()
+    assert st['phase'] == 'running' and st['idle']
+    runs.on_status(status(rid, 'running', goal_index=1, goal_count=1))
+    assert not runs.state()['idle']
+    assert runs.stop()['phase'] == 'finishing'
+    # Bitirilirken gelen durum aşamayı geri almaz; hedef sonuçları işlenir.
+    runs.on_status(status(rid, 'running', goal_count=1, goal_results=['CANCELED']))
+    assert runs.state()['phase'] == 'finishing'
+    assert runs.state()['goal_results'] == ['CANCELED']
+    assert events.wait_phase('finished')
+    final = runs.state()
+    assert final['result'] == 'SUCCEEDED' and final['summary']['goals_reached'] == '2'
+    assert 'stopping' not in events.phases()
+    assert any(d.get('text', '').startswith('Serbest sürüş bitiriliyor')
+               for e, d in events.items if e == 'log')
+
+
+def test_serbest_surus_kapanmazsa_durdurulur(tmp_path):
+    events = Events()
+    finished = []
+    runs = manager(tmp_path, events, fake_launch([], tail='exec sleep 30'),
+                   on_finish=lambda: finished.append(True), finish_timeout=0.5)
+    runs.start(1, mode='interactive')
+    # Nav2 hazır olmadan Durdur: bitirilmez, durdurulur.
+    time.sleep(0.3)
+    assert runs.stop()['phase'] == 'stopping'
+    assert events.wait_phase('stopped') and not finished
+
+    events = Events()
+    runs = manager(tmp_path, events, fake_launch([], tail='exec sleep 30'),
+                   on_finish=lambda: finished.append(True), finish_timeout=0.5)
+    rid = runs.start(1, mode='interactive')['run_id']
+    runs.on_status(status(rid, 'idle', goal_count=0))
+    time.sleep(0.3)
+    assert runs.stop()['phase'] == 'finishing'
+    assert events.wait_phase('stopped') and finished == [True]
+    assert events.phases()[-3:] == ['finishing', 'stopping', 'stopped']
+    assert not runs.process.group_alive()
 
 
 def test_kapanista_calisan_kosu_durdurulur(tmp_path):

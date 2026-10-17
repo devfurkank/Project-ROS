@@ -6,11 +6,16 @@ gibi: launch kendi süreç grubunda (yeni oturumda) açılır; durdururken önce
 kapanmazsa bütün gruba SIGTERM ve SIGKILL gider. Böylece yalnızca o koşudan kalan süreçler
 ölür, kullanıcının başka oturumlarına dokunulmaz.
 
-RunManager panelden başlatılan senaryo koşusunu yönetir: tek koşu kilidi, komut, aşama, günlük,
-sonuç. Aşama süreçten ve mission_manager'ın /mission_status iletilerinden (on_status) çıkarılır:
+RunManager panelden başlatılan koşuyu yönetir: tek koşu kilidi, komut, aşama, günlük, sonuç.
+Koşu senaryo görevi (scenario.launch.py) ya da serbest sürüştür (free.launch.py, mode
+'interactive': hedefleri panel verir). Aşama süreçten ve mission_manager'ın /mission_status
+iletilerinden (on_status) çıkarılır:
     idle → starting → running → finishing → finished
                     ↘ stopping → stopped          (Durdur)
                     ↘ error                       (launch hata koduyla bitti / sonuç yok)
+Serbest sürüşte Durdur görevi bitirir: mission_manager'a "finish" gider (on_finish), sonuçlar
+yazılır ve launch kendiliğinden kapanır (running → finishing → finished). FINISH_TIMEOUT içinde
+kapanmazsa ya da Nav2 hazır olmadan durdurulursa süreç senaryo koşusundaki gibi durdurulur.
 """
 
 import collections
@@ -24,6 +29,10 @@ import time
 
 LOG_LINES = 200  # yeni açılan sekmeye gönderilen son günlük satırları
 NOISE = ('screen size is bogus',)  # WSLg'nin zararsız uyarısı
+LAUNCH_FILES = {'scenario': 'scenario.launch.py', 'interactive': 'free.launch.py'}
+# Serbest sürüşte "bitir"den sonra kapanış için süre: hedefin iptali (≤ 5 s), sonuçların
+# yazılması ve map_saver_cli (≤ 30 s), launch'ın düğümleri kapatması.
+FINISH_TIMEOUT = 60.0
 
 # Launch çıktısındaki iki satır biçimi:
 #   [mission_manager-7] [INFO] [1792226568.000105631] [mission_manager]: Hedef 1/3: (4.00, ...
@@ -79,11 +88,12 @@ def launch_env():
     return env
 
 
-def scenario_command(scenario, gui, rviz, results_dir, run_id, scenarios_file=None):
-    """Panelin çalıştırdığı komut; terminalde aynısı yazılabilir."""
-    cmd = ['ros2', 'launch', 'otonom_surus', 'scenario.launch.py', f'scenario:={scenario}',
+def scenario_command(scenario, gui, rviz, results_dir, run_id, scenarios_file=None,
+                     mode='scenario'):
+    """Panelin çalıştırdığı komut; terminalde aynısı yazılabilir (serbest sürüşte free.launch)."""
+    cmd = ['ros2', 'launch', 'otonom_surus', LAUNCH_FILES[mode], f'scenario:={scenario}',
            f'gui:={str(bool(gui)).lower()}', f'rviz:={str(bool(rviz)).lower()}',
-           f'results_dir:={results_dir}', f'run_id:={run_id}']
+           f'results_dir:={results_dir}', f'run_id:={run_id}', 'source:=panel']
     if scenarios_file:
         cmd.append(f'scenarios_file:={scenarios_file}')
     return cmd
@@ -224,15 +234,17 @@ class ManagedProcess:
 
 class RunManager:
     """
-    Panelden başlatılan senaryo koşusu (aynı anda en çok bir tane).
+    Panelden başlatılan koşu (aynı anda en çok bir tane): senaryo görevi ya da serbest sürüş.
 
     publish(event, data) olayları dağıtır: 'run' (aşama ya da hedef ilerlemesi değişti), 'log'
-    (günlük satırı), 'run_finished' (koşu sonuçlarıyla bitti). command ve gazebo_check testlerde
+    (günlük satırı), 'run_finished' (koşu sonuçlarıyla bitti). on_finish() serbest sürüşü
+    bitirir (panel mission_manager'a "finish" gönderir). command ve gazebo_check testlerde
     değiştirilir.
     """
 
     def __init__(self, results_dir, publish, scenarios_file=None, command=scenario_command,
-                 gazebo_check=gazebo_running, cwd=None, leftover_grace=5.0):
+                 gazebo_check=gazebo_running, cwd=None, leftover_grace=5.0, on_finish=None,
+                 finish_timeout=FINISH_TIMEOUT):
         self.results_dir = results_dir
         self.publish = publish
         self.scenarios_file = scenarios_file
@@ -240,6 +252,8 @@ class RunManager:
         self.gazebo_check = gazebo_check
         self.cwd = cwd
         self.leftover_grace = leftover_grace
+        self.on_finish = on_finish
+        self.finish_timeout = finish_timeout
         self.process = None
         self.log = collections.deque(maxlen=LOG_LINES)
         self._lock = threading.Lock()
@@ -254,7 +268,9 @@ class RunManager:
         with self._lock:
             return list(self.log)
 
-    def start(self, scenario, gui=True, rviz=False):
+    def start(self, scenario, gui=True, rviz=False, mode='scenario'):
+        if mode not in LAUNCH_FILES:
+            raise RunError(f'Bilinmeyen kip: {mode}')
         with self._lock:
             if self.process is not None and self.process.running:
                 raise RunError('Zaten çalışan bir koşu var; önce durdur.')
@@ -263,12 +279,12 @@ class RunManager:
             run_id = 'p' + time.strftime('%Y%m%d-%H%M%S')
             cmd = self.command(scenario=scenario, gui=gui, rviz=rviz,
                                results_dir=self.results_dir, run_id=run_id,
-                               scenarios_file=self.scenarios_file)
+                               scenarios_file=self.scenarios_file, mode=mode)
             self._state = {
-                'phase': 'starting', 'scenario': scenario, 'run_id': run_id, 'gui': bool(gui),
-                'rviz': bool(rviz), 'command': ' '.join(cmd), 'started': time.time(),
-                'goal': None, 'goal_count': None, 'goal_results': [], 'recoveries': 0,
-                'recovering': False,
+                'phase': 'starting', 'mode': mode, 'scenario': scenario, 'run_id': run_id,
+                'gui': bool(gui), 'rviz': bool(rviz), 'command': ' '.join(cmd),
+                'started': time.time(), 'goal': None, 'goal_count': None, 'goal_results': [],
+                'recoveries': 0, 'recovering': False, 'idle': False,
             }
             self._stopping = False
             self.log.clear()
@@ -286,19 +302,48 @@ class RunManager:
         return state
 
     def stop(self):
-        """Durdurmayı başlatır ve hemen döner; bitiş 'run' olayıyla (stopped) bildirilir."""
+        """
+        Durdurmayı başlatır ve hemen döner; bitiş 'run' olayıyla bildirilir.
+
+        Serbest sürüşte görev hedef alabilir durumdaysa (running) önce bitirilir: sonuçlar
+        yazılır, bitiş 'finished' olur. Bitirilirken (finishing) ikinci Durdur süreci durdurur.
+        Senaryo koşusu ve henüz hazır olmayan serbest sürüş durdurulur (stopped, sonuç yazılmaz).
+        """
         with self._lock:
             process = self.process
             if process is None or not process.running:
                 raise RunError('Çalışan koşu yok.')
             if self._stopping:
                 return dict(self._state)
+            finish = (self._state.get('mode') == 'interactive'
+                      and self._state['phase'] == 'running' and self.on_finish is not None)
+            if finish:
+                self._state['phase'] = 'finishing'
+            else:
+                self._stopping = True
+                self._state['phase'] = 'stopping'
+            state = dict(self._state)
+        self.publish('run', state)
+        worker = self._finish_worker if finish else self._stop_worker
+        threading.Thread(target=worker, args=(process,), daemon=True).start()
+        return state
+
+    def _finish_worker(self, process):
+        self.on_finish()
+        self._add_log({'level': 'INFO', 'source': 'panel',
+                       'text': 'Serbest sürüş bitiriliyor; sonuçlar yazılıyor'})
+        if process.wait(self.finish_timeout):
+            return
+        with self._lock:
+            if self._stopping or self.process is not process:
+                return
             self._stopping = True
             self._state['phase'] = 'stopping'
             state = dict(self._state)
         self.publish('run', state)
-        threading.Thread(target=self._stop_worker, args=(process,), daemon=True).start()
-        return state
+        self._add_log({'level': 'WARN', 'source': 'panel', 'text':
+                       f'Görev {self.finish_timeout:.0f} s içinde kapanmadı; durduruluyor'})
+        self._stop_worker(process)
 
     def shutdown(self, timeout=60.0):
         """Panel kapanırken: çalışan koşuyu durdurur ve bitmesini bekler."""
@@ -330,17 +375,19 @@ class RunManager:
 
         Yalnızca bu koşunun (run_id) iletisi işlenir. Durum değiştiyse 'run' olayı gider; 1 Hz'lik
         tekrarlar (yalnızca süre ve yol değişir) olay üretmez. Hedefler arasındaki kısa anda
-        (goal_index None) son hedef korunur.
+        (goal_index None) son hedef korunur. Bitirilirken (finishing) hedef sonuçları işlenir
+        ama aşama geri dönmez.
         """
         with self._lock:
             st = self._state
-            if (st['phase'] not in ('starting', 'running')
+            if (st['phase'] not in ('starting', 'running', 'finishing')
                     or st.get('run_id') != status.get('run_id')):
                 return
             before = dict(st, goal_results=list(st['goal_results']))
             mission = status.get('state')
-            if mission in ('running', 'recovering'):
-                st['phase'] = 'running'
+            if mission in ('running', 'recovering', 'idle'):
+                if st['phase'] != 'finishing':
+                    st['phase'] = 'running'
             elif mission == 'finished':
                 st['phase'], st['result'] = 'finishing', status.get('result')
             if status.get('goal_index') is not None:
@@ -349,6 +396,7 @@ class RunManager:
             st['goal_results'] = list(status.get('goal_results') or [])
             st['recoveries'] = status.get('recoveries', 0)
             st['recovering'] = mission == 'recovering'
+            st['idle'] = mission == 'idle'
             if st == before:
                 return
             state = dict(st)

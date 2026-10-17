@@ -6,8 +6,9 @@ istekleri ThreadingHTTPServer'ın iş parçacıklarında karşılanır. Canlı v
 Server-Sent Events (SSE) ile akar: bağlı her sekmenin bir kuyruğu vardır, Broadcaster olayları
 bütün kuyruklara dağıtır, /api/stream isteği kendi kuyruğunu boşaltır. Koşuları panel_process'in
 RunManager'ı alt süreç olarak başlatır ve durdurur; ROS konularını panel_live'ın LiveBridge'i
-önbelleğe alıp hız sınırlı olaylar olarak gönderir; geçmiş koşuları panel_runs'ın RunIndex'i
-results/ altından okur. Python standart kütüphanesi ve Pillow yeter.
+önbelleğe alıp hız sınırlı olaylar olarak gönderir; elle hedefi, engel atmayı ve kaldırmayı
+panel_control'ün Controller'ı yapar; geçmiş koşuları panel_runs'ın RunIndex'i results/ altından
+okur. Python standart kütüphanesi ve Pillow yeter.
 
 Sunucu yalnızca 127.0.0.1'e bağlanır (kimlik doğrulama yok); WSL2'nin localhost yönlendirmesi
 sayesinde Windows tarayıcısından http://localhost:<port> ile açılır.
@@ -16,15 +17,22 @@ Uç noktalar:
     GET  /                web/ klasöründeki arayüz (index.html, app.js, style.css)
     GET  /api/health      sunucu durumu
     GET  /api/stream      SSE: hello (durum, son günlük, canlı verinin son hali), ping, run, log,
-                          run_finished, runs_changed; canlı: status, pose, trail, plan, map
+                          run_finished, runs_changed; canlı: status, pose, trail, plan, map,
+                          obstacles (atılan kutular)
     GET  /api/worlds      paketteki dünyaların geometrisi (world_sdf)
     GET  /api/scenarios   scenarios.yaml'daki senaryolar (hedef yaw'ları derece)
     GET  /api/run         koşunun durumu
     POST /api/run/start   {"scenario": 1, "gui": true, "rviz": false}
-    POST /api/run/stop
+    POST /api/free/start  aynı gövde: serbest sürüş (senaryonun dünyası, hedefleri panel verir)
+    POST /api/run/stop    senaryo koşusunu durdurur; serbest sürüşü bitirir (sonuçlar yazılır)
+    POST /api/goal        {"x": 2.0, "y": 1.0, "yaw_deg": 90}: elle hedef (map çerçevesi)
+    POST /api/obstacle    {"x": 1.2, "y": 2.4}: 0.4 m'lik statik kutu at
+    DELETE /api/obstacle  {"name": "panel_kutu_1"} ya da boş gövde: bir kutuyu ya da hepsini kaldır
     GET  /api/runs        geçmiş koşular, en yeni önce (?world=senaryo2.world)
     GET  /api/runs/<kimlik>             tek koşu (kimlik: s1_r1, parametre_fpd2/s2_r1 ...)
     GET  /api/runs/<kimlik>/trajectory  yörünge [[t, x, y], ...] (?dt=0.5: seyreltilmiş)
+    GET  /api/runs/<kimlik>/events      olay kaydı [{t, type, ...}, ...]
+    GET  /api/runs/<kimlik>/meta        meta kaydı
 
 Kullanım:
     ros2 launch otonom_surus panel.launch.py
@@ -42,6 +50,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
+from otonom_surus.panel_control import (
+    check_box, check_goal, ControlError, Controller, grid_of, lane_aabbs)
 from otonom_surus.panel_live import LiveBridge
 from otonom_surus.panel_process import RunError, RunManager
 from otonom_surus.panel_runs import RunIndex
@@ -51,12 +61,15 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
-VERSION = '0.4.0'
+VERSION = '0.6.0'
 HOST = '127.0.0.1'  # bilerek parametre değil: panelin ağa açılmaması için (PT18)
 PING_PERIOD = 5.0  # s; istemci 10 s veri alamazsa bağlantıyı kopmuş sayar
 SSE_RETRY_MS = 3000  # tarayıcının kopunca yeniden bağlanma aralığı
 CLIENT_QUEUE = 256  # sekme başına bekleyen olay sınırı; dolunca en eski düşer
 MAX_BODY = 64 * 1024  # POST gövdesi sınırı
+READY = ('running', 'recovering', 'idle')  # /mission_status: görev hedef ve engel kabul eder
+# Koşu dizininin dosya uçları: yol eki -> RunIndex yöntemi ve kayıt yoksa iletisi.
+RUN_FILES = {'/events': ('events', 'olay kaydı yok'), '/meta': ('meta', 'meta kaydı yok')}
 
 MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -122,6 +135,16 @@ def runs_route(index, path, query):
         except FileNotFoundError:
             return 404, {'error': f'{run_id}: yörünge kaydı yok'}
         return 200, {'id': run_id, 'pts': points}
+    for suffix, (method, missing) in RUN_FILES.items():
+        if rest.endswith(suffix):
+            run_id = rest[:-len(suffix)]
+            try:
+                data = getattr(index, method)(run_id)
+            except KeyError:
+                return 404, {'error': f'koşu bulunamadı: {run_id}'}
+            except FileNotFoundError:
+                return 404, {'error': f'{run_id}: {missing}'}
+            return 200, {'id': run_id, method: data} if method == 'events' else data
     record = index.get(rest)
     if record is None:
         return 404, {'error': f'koşu bulunamadı: {rest}'}
@@ -188,7 +211,7 @@ class PanelHandler(BaseHTTPRequestHandler):
     self.server.panel; web_dir, broadcaster, hello(), api(method, path, body) ve log_request()
     sağlayan nesnedir: çalışırken PanelServer düğümü, testlerde onun yerine geçen basit bir nesne.
     api() bilinmeyen uçta None, bilinende (HTTP durum kodu, JSON verisi) döndürür. body,
-    POST'ta JSON gövdesi, GET'te sorgu parametreleridir ({ad: son değer}).
+    POST ve DELETE'te JSON gövdesi, GET'te sorgu parametreleridir ({ad: son değer}).
     """
 
     server_version = 'OtonomPanel/' + VERSION
@@ -204,12 +227,18 @@ class PanelHandler(BaseHTTPRequestHandler):
             self.send_static()
 
     def do_POST(self):  # noqa: N802
+        self.with_body('POST')
+
+    def do_DELETE(self):  # noqa: N802
+        self.with_body('DELETE')
+
+    def with_body(self, method):
         path = urlsplit(self.path).path
         body, error = self.read_json()
         if error:
             self.send_json({'error': error}, 400)
         else:
-            self.api('POST', path, body)
+            self.api(method, path, body)
 
     def api(self, method, path, body):
         result = self.server.panel.api(method, path, body)
@@ -323,12 +352,14 @@ class PanelServer(Node):
             scenario_files=[self.scenarios_file,
                             os.path.join(self.results_dir, 'panel_scenarios.yaml')])
         self.announced = set()  # bittiği runs_changed ile duyurulan görevler (run_id)
+        self.geometries = {}  # dünya dosyası -> world_geometry (müdahale denetimleri)
         self.live = LiveBridge(self, self.broadcaster.publish, on_status=self.on_mission_status,
                                movers=self.mover_names())
+        self.control = Controller(self, self.broadcaster.publish)
         # scenarios_file varsayılansa komuta yazılmaz (launch'ın varsayılanı aynı dosya).
         custom = None if self.scenarios_file == default_scenarios else self.scenarios_file
-        self.runs = RunManager(self.results_dir, self.on_run_event,
-                               scenarios_file=custom, cwd=os.getcwd())
+        self.runs = RunManager(self.results_dir, self.on_run_event, scenarios_file=custom,
+                               cwd=os.getcwd(), on_finish=self.control.finish)
         self.started = time.monotonic()
 
     def mover_names(self):
@@ -347,10 +378,12 @@ class PanelServer(Node):
         RunManager'ın olayları; yeni koşu başlarken önceki koşunun canlı verisi silinir.
 
         run_finished'e koşunun dizindeki kimliği (index_id) eklenir: istemci listeyi yeniler
-        ve o satırı "az önce" diye işaretler.
+        ve o satırı "az önce" diye işaretler. Atılan kutular yeni koşu başlayana kadar
+        unutulmaz: son koşunun haritasıyla birlikte görünürler.
         """
         if event == 'run' and data.get('phase') == 'starting':
             self.live.reset()
+            self.control.reset()
         if event == 'run_finished':
             data = dict(data, index_id=self.index.id_for(
                 self.results_dir, data.get('scenario'), data.get('run_id')))
@@ -387,7 +420,7 @@ class PanelServer(Node):
     def hello(self):
         """Yeni bağlanan sekmeye: sağlık, koşunun durumu, son günlük ve canlı verinin son hali."""
         return {**self.health(), 'run': self.runs.state(), 'log': self.runs.recent_log(),
-                'live': self.live.snapshot()}
+                'live': {**self.live.snapshot(), 'boxes': self.control.boxes_list()}}
 
     def api(self, method, path, body):
         if method == 'GET':
@@ -397,14 +430,102 @@ class PanelServer(Node):
                         '/api/run': lambda: (200, self.runs.state())}
             handler = handlers.get(path)
             return handler() if handler else runs_route(self.index, path, body or {})
-        if method == 'POST' and path == '/api/run/start':
-            return self.start_run(body)
-        if method == 'POST' and path == '/api/run/stop':
-            try:
-                return 200, self.runs.stop()
-            except RunError as e:
-                return 409, {'error': str(e)}
-        return None
+        handlers = {
+            ('POST', '/api/run/start'): lambda: self.start_run(body),
+            ('POST', '/api/free/start'): lambda: self.start_run(body, mode='interactive'),
+            ('POST', '/api/run/stop'): self.stop_run,
+            ('POST', '/api/goal'): lambda: self.goal(body),
+            ('POST', '/api/obstacle'): lambda: self.add_obstacle(body),
+            ('DELETE', '/api/obstacle'): lambda: self.remove_obstacles(body),
+        }
+        handler = handlers.get((method, path))
+        if handler is None:
+            return None
+        try:
+            return handler()
+        except ControlError as e:
+            return e.status, {'error': str(e)}
+
+    def stop_run(self):
+        try:
+            return 200, self.runs.stop()
+        except RunError as e:
+            return 409, {'error': str(e)}
+
+    def ready_run(self):
+        """
+        Müdahaleye hazır koşu: (senaryo tanımı, dünya geometrisi, canlı görünüm).
+
+        Panelden başlatılmış ve görevi hedef alabilir durumda (Nav2 hazır) bir koşu olmalı; panel
+        dışından başlatılan görev yalnızca izlenir. Değilse ControlError (409).
+        """
+        run = self.runs.state()
+        view = self.live.view()
+        status = view['status'] or {}
+        if run['phase'] == 'starting':
+            raise ControlError('Görev henüz hazır değil (simülasyon açılıyor).', 409)
+        if run['phase'] != 'running':
+            raise ControlError('Panelden başlatılmış, sürmekte olan bir koşu yok.', 409)
+        if status.get('run_id') != run.get('run_id') or status.get('state') not in READY:
+            raise ControlError('Görev henüz hazır değil (Nav2 bekleniyor).', 409)
+        try:
+            scenario = load_scenario(self.scenarios_file, run['scenario'])
+            world = os.path.join(self.worlds_dir, scenario['world'])
+            if world not in self.geometries:
+                self.geometries[world] = world_geometry(world)
+        except (OSError, ValueError, ET.ParseError) as e:
+            raise ControlError(f'Dünya okunamadı: {e}', 500) from None
+        return scenario, self.geometries[world], view
+
+    @staticmethod
+    def point(body):
+        """Gövdeden (x, y) ya da ControlError (400)."""
+        try:
+            x, y = float(body['x']), float(body['y'])
+        except (KeyError, TypeError, ValueError):
+            raise ControlError('x ve y sayı olmalı', 400) from None
+        if not (math.isfinite(x) and math.isfinite(y)):
+            raise ControlError('x ve y sonlu olmalı', 400)
+        return x, y
+
+    def goal(self, body):
+        x, y = self.point(body)
+        try:
+            yaw = float(body.get('yaw_deg', 0.0))
+        except (TypeError, ValueError):
+            raise ControlError('yaw_deg sayı olmalı', 400) from None
+        if not math.isfinite(yaw):
+            raise ControlError('yaw_deg sonlu olmalı', 400)
+        _, geometry, view = self.ready_run()
+        error = check_goal(x, y, geometry, self.control.boxes_list(), grid_of(view['map']))
+        if error:
+            raise ControlError(error, 400)
+        yaw = round(math.degrees(math.atan2(math.sin(math.radians(yaw)),
+                                            math.cos(math.radians(yaw)))), 1)
+        self.control.send_goal(x, y, yaw)
+        self.get_logger().info(f'Elle hedef: ({x:.2f}, {y:.2f}), yaw {yaw:.0f}°')
+        return 200, {'x': round(x, 3), 'y': round(y, 3), 'yaw_deg': yaw}
+
+    def add_obstacle(self, body):
+        x, y = self.point(body)
+        scenario, geometry, view = self.ready_run()
+        lanes = lane_aabbs(geometry, scenario['moving_obstacles'])
+        pose = view['pose']
+        robot = (pose['x'], pose['y']) if pose else None
+        box = self.control.spawn_box(
+            x, y, lambda boxes: check_box(x, y, geometry, boxes, robot, lanes))
+        self.get_logger().info(f'Kutu atıldı: {box["name"]} ({x:.2f}, {y:.2f})')
+        return 200, box
+
+    def remove_obstacles(self, body):
+        name = body.get('name')
+        if name is not None and not isinstance(name, str):
+            raise ControlError('name metin olmalı', 400)
+        self.ready_run()
+        removed = self.control.delete_boxes(name)
+        if removed:
+            self.get_logger().info(f'Kutu kaldırıldı: {", ".join(removed)}')
+        return 200, {'removed': removed, 'boxes': self.control.boxes_list()}
 
     def worlds(self):
         worlds = []
@@ -432,7 +553,8 @@ class PanelServer(Node):
             return 500, {'error': f'{self.scenarios_file}: {e}'}
         return 200, result
 
-    def start_run(self, body):
+    def start_run(self, body, mode='scenario'):
+        """Senaryo koşusu ya da (mode 'interactive') senaryonun dünyasında serbest sürüş."""
         try:
             scenario = int(body.get('scenario'))
         except (TypeError, ValueError):
@@ -445,7 +567,7 @@ class PanelServer(Node):
             return 400, {'error': f'senaryo {scenario} tanımlı değil (tanımlı: {known})'}
         try:
             state = self.runs.start(scenario, gui=bool(body.get('gui', True)),
-                                    rviz=bool(body.get('rviz', False)))
+                                    rviz=bool(body.get('rviz', False)), mode=mode)
         except RunError as e:
             return 409, {'error': str(e)}
         self.get_logger().info(f'Koşu başladı: {state["command"]}')

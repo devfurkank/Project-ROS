@@ -25,6 +25,7 @@
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>turtlebot3_gazebo</exec_depend>
   <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>gazebo_msgs</exec_depend>
   <exec_depend>gazebo_plugins</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>ros2launch</exec_depend>

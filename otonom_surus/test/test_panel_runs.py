@@ -12,7 +12,7 @@ import os
 import pathlib
 
 from otonom_surus.panel_runs import (
-    GOAL_FIELDS, read_trajectory, RUN_FIELDS, RunIndex, variant_label)
+    GOAL_FIELDS, read_events, read_trajectory, RUN_FIELDS, RunIndex, variant_label)
 import pytest
 
 SCENARIOS = """
@@ -177,6 +177,40 @@ def test_yorunge_okuma_seyreltme_ve_hatalar(tree, tmp_path):
         tree.trajectory('s2_r1')
     with pytest.raises(KeyError):
         tree.trajectory('s9_yok')
+
+
+def test_olay_ve_meta_kaydi(tree, tmp_path):
+    panel = pathlib.Path(tree.panel_dir)
+    name = 's1_p20261017-153000'
+    write(panel / 'events' / f'{name}.jsonl',
+          '{"t": 31.0, "type": "goal", "index": 2, "x": 2.0, "y": 1.0, "yaw": 90.0}\n'
+          'bozuk satır\n'
+          '{"t": 20.4, "type": "spawn", "name": "panel_kutu_1", "x": 1.2, "y": 2.4}\n'
+          '{"type": "delete", "name": "zamansız"}\n'
+          '[1, 2]\n'
+          '{"t": -1.5, "type": "spawn", "name": "panel_kutu_0", "x": 0.5, "y": 0.5}\n'
+          '{"t": 31.0, "type": "cancel", "index": 1}\n')
+    write(panel / 'meta' / f'{name}.json',
+          '{"v": 1, "mode": "interactive", "source": "panel", "scenario": 1}\n')
+    _touch_later(panel / 'events')
+    _touch_later(panel / 'meta')
+    rid = f'panel/{name}'
+    record = tree.get(rid)
+    assert record['files']['events'] and record['files']['meta']
+    assert (record['mode'], record['source']) == ('interactive', 'panel')
+    assert (tree.get('s1_r1')['mode'], tree.get('s1_r1')['source']) == (None, None)  # P6 öncesi
+    events = tree.events(rid)
+    assert [(e['t'], e['type']) for e in events] == [
+        (-1.5, 'spawn'), (20.4, 'spawn'), (31.0, 'goal'), (31.0, 'cancel')]  # aynı t'de sıra
+    assert tree.meta(rid)['scenario'] == 1
+    with pytest.raises(FileNotFoundError):
+        tree.events('s1_r1')
+    with pytest.raises(FileNotFoundError):
+        tree.meta('s1_r1')
+    with pytest.raises(KeyError):
+        tree.events('s9_yok')
+    with pytest.raises(FileNotFoundError):
+        read_events(str(tmp_path / 'yok.jsonl'))
 
 
 def test_varyant_etiketi(tmp_path):

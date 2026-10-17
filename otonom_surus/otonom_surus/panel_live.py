@@ -155,6 +155,11 @@ class LiveBridge:
             return {'status': self.status, 'map': self.map_event, 'trail': self.trail,
                     'plan': self.plan, 'pose': self.pose}
 
+    def view(self):
+        """Müdahale denetimleri için: son durum, robotun konumu ve son harita iletisi (/map)."""
+        with self._lock:
+            return {'status': self.status, 'pose': self.pose, 'map': self.map_msg}
+
     # --- Geri çağrılar (ROS iş parçacığı) -----------------------------------------------------
 
     def on_map(self, msg):

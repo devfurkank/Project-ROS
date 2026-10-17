@@ -28,6 +28,9 @@
   --map-ok: #639922;
   --map-bad: #e24b4a;
   --map-path: #1d9e75;
+  /* Panelin müdahaleleri: atılan kutu (Gazebo'daki rengiyle aynı ton) ve elle verilen hedef */
+  --map-thrown: #c2357e;
+  --map-manual: #7a52cc;
   /* Canlı SLAM haritası: boş hücre zeminle aynı, dolu hücre koyu; bilinmeyen alan sisli */
   --map-free: #f0eee6;
   --map-slam: #44433f;
@@ -69,6 +72,8 @@
     --warning-text: #ef9f27;
     --accent-fill: #378add;
     --map-wall: #b4b2a9;
+    --map-thrown: #dd5c9e;
+    --map-manual: #a68bf0;
     --map-free: #262624;
     --map-slam: #d3d1c7;
     --map-fog: rgba(136, 135, 128, 0.32);
@@ -208,6 +213,7 @@ button:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 
 .bars .ok { background: var(--map-ok); }
 .bars .bad { background: var(--map-bad); }
 .bars .cur { background: var(--accent-fill); }
+.bars .skip { background: repeating-linear-gradient(135deg, var(--border-strong) 0 3px, transparent 3px 6px); }
 .summary { margin-top: 10px; }
 .summary:empty { display: none; }
 
@@ -272,6 +278,21 @@ select:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 
 .chip:disabled { opacity: 0.45; cursor: default; }
 .playbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
 .playbar .chip { padding: 3px 9px; font-size: 12px; }
+.playbar .chip .icon { width: 14px; height: 14px; }
+#boxCount:not(:empty) { margin-left: 2px; }
+/* İleti tek satır: araç değişince ya da ret gelince harita kaymasın (tıklanan nokta kayardı). */
+.toolmsg {
+  flex: 1 1 160px; min-width: 0; color: var(--text-secondary); text-align: right;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.toolmsg.bad { color: var(--danger-text); }
+/* Onay çubuğu araç çubuğunun yerine geçer; yüksekliği onunla aynı kalsın diye dikey dolgu yok. */
+.confirm {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 0 0 0 10px;
+  font-size: 13px; border-radius: var(--radius); background: var(--warning-bg); color: var(--warning-text);
+}
+.confirm #confirmText { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#map.tool { cursor: crosshair; touch-action: none; }
 #rpTime { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .tlbox { margin-top: 10px; }
 .tlbox .label { margin-bottom: 4px; }

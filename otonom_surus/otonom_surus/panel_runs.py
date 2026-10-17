@@ -8,15 +8,17 @@ s<N>_<run_id>'dir; kökteki koşularda klasör yazılmaz:
     s1_r1    parametre_fpd2/s2_r1    panel/s1_p20261017-153000
 
 Her koşuya goals.csv'den hedef sonuçları ve hangi kayıt dosyalarının bulunduğu eklenir (yörünge,
-harita, günlük; P6–P10'da meta, olay, engel ve ayrıntılı kayıt). Eksik dosya hata değildir,
-"kayıt yok" demektir. Varyant etiketi klasördeki nav2_params.yaml'ın paketinkinden farkıdır
-(ör. "forward_prune_distance 2.0"); fark yoksa klasörün adı.
+harita, günlük, meta, olay; P8–P10'da engel ve ayrıntılı kayıt). Eksik dosya hata değildir,
+"kayıt yok" demektir. Meta'dan koşunun kipi (senaryo / serbest sürüş) ve kaynağı da alınır.
+Varyant etiketi klasördeki nav2_params.yaml'ın paketinkinden farkıdır (ör.
+"forward_prune_distance 2.0"); fark yoksa klasörün adı.
 
 Dizin önbelleklidir: her istekte yalnızca dosyaların değişim zamanlarına bakılır, yalnızca değişen
 klasör yeniden okunur.
 """
 
 import csv
+import json
 import math
 import os
 import threading
@@ -39,8 +41,8 @@ RECORDS = {
     'trajectory': ('trajectories', '.csv'),
     'map': ('maps', '.yaml'),
     'log': ('logs', '.log'),
-    'meta': ('meta', '.json'),  # P6
-    'events': ('events', '.jsonl'),  # P6
+    'meta': ('meta', '.json'),
+    'events': ('events', '.jsonl'),
     'obstacles': ('obstacles', '.csv'),  # P8
     'replay': ('replay', '.json.gz'),  # P10
 }
@@ -102,6 +104,37 @@ def read_trajectory(path, dt=None):
         thinned.append(points[-1])
         points = thinned
     return points
+
+
+def read_events(path):
+    """
+    Olay kaydı (JSON satırları) -> [olay, ...], t sırasıyla (aynı t'de dosyadaki sıra korunur).
+
+    Her olayda sayı t ve metin type bulunur; bozuk satırlar atlanır. Dosya yoksa
+    FileNotFoundError.
+    """
+    events = []
+    with open(path, encoding='utf-8') as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if (isinstance(event, dict) and isinstance(event.get('type'), str)
+                    and isinstance(event.get('t'), (int, float))
+                    and math.isfinite(event['t'])):
+                events.append(event)
+    return sorted(events, key=lambda e: e['t'])
+
+
+def read_meta(path):
+    """Meta kaydı (JSON nesnesi); okunamazsa ya da nesne değilse None."""
+    try:
+        with open(path, encoding='utf-8') as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return meta if isinstance(meta, dict) else None
 
 
 def _flatten(data, prefix=()):
@@ -221,19 +254,32 @@ class RunIndex:
                     return folder['records'][run_id]
         return None
 
-    def trajectory(self, run_id, dt=None):
-        """Yörünge (read_trajectory); koşu yoksa KeyError, dosya yoksa FileNotFoundError."""
+    def record_path(self, run_id, kind):
+        """Koşunun kayıt dosyasının yolu (RECORDS türü); koşu dizinde yoksa KeyError."""
+        sub, ext = RECORDS[kind]
         with self._lock:
             self._refresh()
             for folder in self._folders.values():
                 record = folder['records'].get(run_id)
                 if record is not None:
-                    path = os.path.join(folder['path'], 'trajectories',
-                                        f's{record["scenario"]}_{record["run_id"]}.csv')
-                    break
-            else:
-                raise KeyError(run_id)
-        return read_trajectory(path, dt)
+                    return os.path.join(folder['path'], sub,
+                                        f's{record["scenario"]}_{record["run_id"]}{ext}')
+        raise KeyError(run_id)
+
+    def trajectory(self, run_id, dt=None):
+        """Yörünge (read_trajectory); koşu yoksa KeyError, dosya yoksa FileNotFoundError."""
+        return read_trajectory(self.record_path(run_id, 'trajectory'), dt)
+
+    def events(self, run_id):
+        """Olay kaydı (read_events); koşu yoksa KeyError, dosya yoksa FileNotFoundError."""
+        return read_events(self.record_path(run_id, 'events'))
+
+    def meta(self, run_id):
+        """Meta kaydı; koşu yoksa KeyError, dosya yoksa ya da okunamazsa FileNotFoundError."""
+        meta = read_meta(self.record_path(run_id, 'meta'))
+        if meta is None:
+            raise FileNotFoundError(run_id)
+        return meta
 
     def warnings(self):
         """Okuma sırasında atlanan dosya ve satırlar için kullanıcıya gösterilecek notlar."""
@@ -326,6 +372,10 @@ class RunIndex:
             candidates = goals.get((scenario, run_id), [])
             same = [g for g in candidates if g.get('timestamp') == row.get('timestamp')]
             scenario_def = defs.get(scenario, {})
+            meta = {}
+            if name + RECORDS['meta'][1] in present['meta']:
+                meta = read_meta(os.path.join(path, RECORDS['meta'][0],
+                                              name + RECORDS['meta'][1])) or {}
             records[rid] = {  # aynı kimlik ikinci kez geçerse sonraki satır geçerli
                 'id': rid, 'folder': key, 'label': label, 'variant': variant,
                 'panel': path == self.panel_dir,
@@ -343,6 +393,9 @@ class RunIndex:
                 'min_obstacle_dist_m': _number(row.get('min_obstacle_dist_m')),
                 'recoveries': _integer(row.get('recoveries')),
                 'failure_reason': row.get('failure_reason') or '',
+                # Meta'dan (P6 öncesi koşularda yok): scenario | interactive, panel | terminal ...
+                'mode': meta.get('mode') if isinstance(meta.get('mode'), str) else None,
+                'source': meta.get('source') if isinstance(meta.get('source'), str) else None,
                 'goals': sorted((self._goal(g) for g in same or candidates),
                                 key=lambda g: g['index'] or 0),
                 'files': {kind: name + ext in present[kind]

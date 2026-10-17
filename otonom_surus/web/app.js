@@ -3,6 +3,8 @@
 // P3: canlı harita (SLAM, robot, iz, Nav2 planı, hareketli kutular), görev durumu ve metrikler.
 // P4: geçmiş koşular tablosu (koşu dizini). P5: tekrar oynatma: dünya ve en çok 6 koşu seçilir,
 // hayalet robotlar kaydedilmiş yörüngelerinde birlikte oynar; zaman çizelgesi, koşu kartları, fark.
+// P6: müdahale: haritaya tıkla-git (elle hedef, E1, E2…), Gazebo'ya kutu at / kaldır, serbest sürüş;
+// tekrar oynatmada olay kaydı (kutular ve elle hedefler kendi anlarında).
 // Sunucuyla iki yol: /api/stream (SSE, sunucu -> tarayıcı) ve /api/... (JSON istekleri).
 'use strict';
 
@@ -24,7 +26,22 @@ const LIVE_HINT = 'Canlı: SLAM haritası (/map; sisli alan henüz görülmedi),
 const REPLAY_HINT = 'Kaydedilmiş yörüngeler (/odom, dünya koordinatı) zaman ekseninde oynar; ' +
   'robotların numaraları koşu kartlarıyla eşleşir. Zaman çizelgesinde soluk bant robotun ' +
   'hareketsiz kaldığı aralıklar (iki kayıt arası > 1.5 s), dikey çizgiler hedef sonuçları ' +
-  '(kırmızı: başarısız). Hareketli kutuların konum kaydı yok: doğdukları yer ve şeritleri çiziliyor.';
+  '(kırmızı: başarısız, gri: iptal), alttaki işaretler panelin müdahaleleri (kare: kutu atıldı, ' +
+  'boş kare: kaldırıldı, üçgen: elle hedef). Atılan kutular ve elle hedefler (E1, E2…) olay ' +
+  'kaydındaki anlarında görünür. Hareketli kutuların konum kaydı yok: doğdukları yer ve şeritleri ' +
+  'çiziliyor.';
+// Araç çubuğundaki ipuçları kısa (tek satır); ayrıntı haritanın altındaki açıklamada (TOOLS_HINT).
+const TOOL_HINTS = {
+  goal: 'Tıkla: robot oraya gider; yön için tıklayıp sürükle.',
+  box: 'Tıkla: 0.4 m kutu düşer; atılmış kutuya tıkla: kaldırılır.',
+};
+const TOOLS_HINT = ' Hedef ver: sürüklenmezse robot geldiği yöne bakarak durur; senaryo koşusunda ' +
+  'görevin kalanı iptal edilir (önce onay istenir). Engel at: kutu statik, robota 0.25 m’den ' +
+  'yakına ya da başka bir şeyin üstüne atılamaz. Kaldırılan kutunun SLAM haritasındaki izi uzun ' +
+  'süre kalır; Nav2 orayı dolu görebilir.';
+// Kaldırılan kutu SLAM haritasında dolu kalır: slam_toolbox eski taramaların isabetlerini tutar,
+// robot dururken yeni tarama eklemez (P6'da ölçüldü: 28 s sonra 22 hücreden 20'si dolu, PT11).
+const GHOST_NOTE = 'Kutu kaldırıldı; SLAM haritasındaki izi bir süre kalır.';
 // Koşu aşamaları: [rozet metni, rozet rengi]. watching/watched: panel dışından başlatılmış görev.
 const PHASES = {
   idle: ['Hazır', 'neutral'],
@@ -40,6 +57,9 @@ const PHASES = {
 };
 const ACTIVE = new Set(['starting', 'running', 'finishing', 'stopping']);
 const MOVING = new Set(['running', 'recovering']);  // /mission_status: robot hedefe gidiyor
+const READY = new Set(['running', 'recovering', 'idle']);  // görev elle hedef ve kutu kabul eder
+const DRAG_MIN = 0.15;  // m; hedef verirken bundan kısa sürükleme yön sayılmaz
+const BOX_SNAP = 0.05;  // m; atılan kutunun merkezi bu ızgaraya oturur (kapıyı tam kapatmak kolay olsun)
 const STALE_MS = 10000;  // bu kadar süre veri gelmezse bağlantı kopmuş sayılır
 const HEALTH_MS = 10000;  // sunucu bilgisinin yenilenme aralığı
 const POSE_STALE_MS = 3000;  // bu kadar süre konum gelmezse anlık metrikler '–'
@@ -61,17 +81,19 @@ const LEGENDS = {
     ['box', '--map-moving', 'Hareketli kutu ve şeridi']],
   live: [['dot', '--map-robot', 'Robot'], ['line', '--map-path', 'İzlenen yol'],
     ['dash', '--map-robot', 'Nav2 planı'], ['ring', '--map-goal', 'Hedef'],
-    ['ring', '--map-ok', 'Varıldı'], ['ring', '--map-bad', 'Başarısız'],
-    ['box', '--map-slam', 'SLAM: dolu'], ['box', '--map-fog', 'Henüz görülmedi'],
-    ['outline', '--map-wall', 'Gerçek geometri'], ['box', '--map-moving', 'Hareketli kutu']],
+    ['ring', '--map-manual', 'Elle hedef (E1…)'], ['ring', '--map-ok', 'Varıldı'],
+    ['ring', '--map-bad', 'Başarısız'], ['box', '--map-slam', 'SLAM: dolu'],
+    ['box', '--map-fog', 'Henüz görülmedi'], ['outline', '--map-wall', 'Gerçek geometri'],
+    ['box', '--map-moving', 'Hareketli kutu'], ['box', '--map-thrown', 'Atılan kutu']],
   replay: [['dot', '--run-1', 'Robot (numarası koşu kartında)'], ['line', '--run-1', 'İzlenen yol'],
     ['ring', '--text-muted', 'Başlangıç; hareketsiz > 4 s'], ['ring', '--map-goal', 'Hedef'],
-    ['box', '--map-wall', 'Duvar'], ['box', '--map-obstacle', 'Engel'],
-    ['dash', '--map-moving', 'Hareketli kutunun şeridi']],
+    ['ring', '--map-manual', 'Elle hedef (E1…)'], ['box', '--map-wall', 'Duvar'],
+    ['box', '--map-obstacle', 'Engel'], ['dash', '--map-moving', 'Hareketli kutunun şeridi'],
+    ['box', '--map-thrown', 'Atılan kutu']],
 };
 // Tek koşu görünürken hedefler sonucuyla renklenir.
-LEGENDS.replay1 = LEGENDS.replay.slice(0, 4).concat(
-  [['ring', '--map-ok', 'Varıldı'], ['ring', '--map-bad', 'Başarısız']], LEGENDS.replay.slice(4));
+LEGENDS.replay1 = LEGENDS.replay.slice(0, 5).concat(
+  [['ring', '--map-ok', 'Varıldı'], ['ring', '--map-bad', 'Başarısız']], LEGENDS.replay.slice(5));
 
 const state = {
   mode: 'live',
@@ -86,8 +108,18 @@ const state = {
   cards: [],  // dünya kartları: {canvas, geometry, scenario}
   run: {phase: 'idle'},
   busy: false,  // başlat/durdur isteği yolda
+  free: false,  // serbest sürüş seçili (hedefleri kullanıcı verir)
   live: emptyLive(),
   legendKey: '',
+  // Harita araçları (canlı): seçili araç, son çizimin dünya <-> piksel dönüşümü, sürüklenen hedef
+  // ({a, b}: dünya koordinatı), fare altındaki nokta, onay bekleyen hedef, yoldaki istek, ileti.
+  tool: 'goal',
+  mapT: null,
+  drag: null,
+  hover: null,
+  pendingGoal: null,
+  toolBusy: false,
+  toolMsg: null,  // {text, bad, until}
   // Geçmiş koşular (/api/runs, en yeni önce). freshId: bu sekmede az önce biten koşu.
   runs: [],
   runsRoot: '',
@@ -104,9 +136,10 @@ const state = {
 };
 
 // Canlı verinin önbelleği; yeni koşu başlarken boşaltılır. scenario: verinin ait olduğu senaryo.
+// boxes: panelin attığı kutular ({name, x, y, size}).
 function emptyLive() {
   return {scenario: null, status: null, statusAt: 0, pose: null, poseAt: 0, trail: [], plan: [],
-    map: null, mapImg: null, mapCanvas: null, pendingMap: null};
+    map: null, mapImg: null, mapCanvas: null, pendingMap: null, boxes: []};
 }
 
 // --- Yardımcılar ---------------------------------------------------------------------------
@@ -271,6 +304,11 @@ function connect() {
     state.live.plan = d.pts || [];
     redraw();
   });
+  on('obstacles', (d) => {
+    state.live.boxes = d.boxes || [];
+    renderTools();
+    redraw();
+  });
   es.onerror = () => {
     setConnection(false);
     // CONNECTING iken tarayıcı kendisi yeniden dener (sunucunun retry süresiyle);
@@ -414,8 +452,10 @@ function previewCommand() {
   if (ACTIVE.has(state.run.phase) && state.run.command) return state.run.command;
   if (state.scenario === null) return '';
   const dir = state.health ? state.health.results_dir : '<sonuç klasörü>';
-  return `ros2 launch otonom_surus scenario.launch.py scenario:=${state.scenario}` +
-    ` gui:=${$('gz').checked} rviz:=${$('rv').checked} results_dir:=${dir} run_id:=p<tarih-saat>`;
+  const launch = state.free ? 'free.launch.py' : 'scenario.launch.py';
+  return `ros2 launch otonom_surus ${launch} scenario:=${state.scenario}` +
+    ` gui:=${$('gz').checked} rviz:=${$('rv').checked} results_dir:=${dir} run_id:=p<tarih-saat>` +
+    ' source:=panel';
 }
 
 function renderCommand() {
@@ -434,13 +474,20 @@ function renderControls() {
   stop.disabled = !state.connected || !active || state.run.phase === 'stopping' || state.busy;
   go.title = active ? 'Bir koşu sürüyor' : !state.connected ? 'Sunucuya bağlı değil'
     : watching ? 'Simülasyon panel dışından çalışıyor; yalnızca izleniyor' : '';
+  // Serbest sürüş hedef alabilir durumdayken Durdur görevi bitirir (sonuçlar yazılır).
+  const finish = state.run.mode === 'interactive' && state.run.phase === 'running';
+  setText($('stopText'), finish ? 'Bitir' : 'Durdur');
+  stop.title = finish ? 'Serbest sürüşü bitir: sonuçlar kaydedilir, simülasyon kapanır'
+    : state.run.phase === 'finishing' ? 'Beklemeden durdur (sonuçlar yazılmamış olabilir)' : '';
   $('gz').disabled = active;
   $('rv').disabled = active;
+  $('free').disabled = active;
+  renderTools();
 }
 
-async function post(url, body) {
+async function post(url, body, method = 'POST') {
   const r = await fetch(url, {
-    method: 'POST',
+    method,
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body || {}),
   });
@@ -454,11 +501,12 @@ async function startRun() {
   state.busy = true;
   renderControls();
   try {
-    const run = await post('/api/run/start',
-      {scenario: state.scenario, gui: $('gz').checked, rviz: $('rv').checked});
+    const url = state.free ? '/api/free/start' : '/api/run/start';
+    const run = await post(url, {scenario: state.scenario, gui: $('gz').checked, rviz: $('rv').checked});
     // SSE'deki 'run' olayı yanıttan önce gelmiş olabilir; eski yanıt yeni durumu ezmesin.
     if (run.run_id !== state.run.run_id) applyRun(run);
-    note(`Koşu başlatıldı: S${run.scenario}, ${run.run_id}`);
+    note(`${run.mode === 'interactive' ? 'Serbest sürüş' : 'Koşu'} başlatıldı: S${run.scenario}, ` +
+      run.run_id);
   } catch (e) {
     $('err').textContent = e.message;
     note(`Başlatılamadı: ${e.message}`, 'ERROR');
@@ -518,12 +566,30 @@ function runView() {
   if (!ext) return state.run;
   return {phase: ext.state === 'finished' ? 'watched' : 'watching', external: true,
     scenario: ext.scenario, run_id: ext.run_id, goal: ext.goal_index, goal_count: ext.goal_count,
-    goal_results: ext.goal_results, result: ext.result, recovering: ext.state === 'recovering'};
+    goal_results: ext.goal_results, result: ext.result, recovering: ext.state === 'recovering',
+    mode: ext.mode, idle: ext.state === 'idle'};
+}
+
+// Koşunun hedef kuyruğu [[x, y, yaw, kaynak], ...]: görevin durumundan (panelin hedefi kuyruğu
+// değiştirir), yoksa senaryodan.
+function liveGoals(run) {
+  const st = state.live.status;
+  if (st && st.run_id === run.run_id && Array.isArray(st.goals)) return st.goals;
+  const s = scenarioById(run.scenario);
+  return s ? s.goals : [];
+}
+
+// Hedef etiketleri: senaryonun hedefleri 1, 2…; panelden verilenler E1, E2… (elle).
+function goalLabels(goals) {
+  let n = 0;
+  let e = 0;
+  return goals.map((g) => (g[3] === 'panel' ? `E${++e}` : String(++n)));
 }
 
 function renderRun() {
   const run = runView();
   const going = run.phase === 'running' || run.phase === 'watching';
+  const free = run.mode === 'interactive';
   let [label, tone] = PHASES[run.phase] || [run.phase, 'neutral'];
   if (run.phase === 'finished' && run.result !== 'SUCCEEDED') {
     label = `Bitti: ${run.result}`;
@@ -531,22 +597,30 @@ function renderRun() {
   } else if (run.phase === 'running' && run.recovering) {
     label = 'Kurtarma davranışı';
     tone = 'warn';
+  } else if (run.phase === 'running' && free) {
+    label = 'Serbest sürüş';
   }
   const badge = $('badge');
   badge.textContent = label;
   badge.className = 'badge ' + tone;
 
   const s = scenarioById(run.scenario);
-  $('runScn').textContent = run.scenario
-    ? `S${run.scenario}${s ? ' · ' + s.name : ''}${run.external ? ' · panel dışından' : ''}` : '';
+  $('runScn').textContent = run.scenario ? `S${run.scenario}${s ? ' · ' + s.name : ''}` +
+    `${free ? ' · serbest' : ''}${run.external ? ' · panel dışından' : ''}` : '';
 
-  const count = run.goal_count || (s ? s.goals.length : 0);
+  const goals = liveGoals(run);
+  const labels = goalLabels(goals);
+  const count = run.goal_count || goals.length;
   const results = run.goal_results || [];
   let line = 'Koşu yok';
   if (run.phase === 'starting') line = 'Gazebo, SLAM ve Nav2 açılıyor…';
+  else if (going && run.idle) line = 'Hedef bekleniyor · haritaya tıkla';
   else if (going && run.goal) {
-    const g = s && s.goals[run.goal - 1];
-    line = `Hedef ${run.goal} / ${count}` + (g ? `  →  (${g[0]}, ${g[1]})` : '');
+    const g = goals[run.goal - 1];
+    const name = labels[run.goal - 1] || String(run.goal);
+    const total = labels.filter((l) => !l.startsWith('E')).length;  // senaryonun hedefleri
+    line = `Hedef ${name}` + (name.startsWith('E') ? '' : ` / ${total}`) +
+      (g ? `  →  (${g[0]}, ${g[1]})` : '');
     if (run.external && run.recovering) line += ' · kurtarma';
   } else if (going) line = 'Nav2 bekleniyor…';
   else if (run.phase === 'finishing') line = 'Sonuçlar ve harita yazılıyor…';
@@ -554,7 +628,8 @@ function renderRun() {
   else if (run.phase === 'finished' && run.summary) {
     line = `${run.summary.goals_reached}/${run.summary.goal_count} hedef · ${run.result}`;
   } else if (run.phase === 'watched') {
-    line = `${results.filter((r) => r === 'SUCCEEDED').length}/${count} hedef · ${run.result}`;
+    const counted = results.filter((r) => r !== 'CANCELED').length;
+    line = `${results.filter((r) => r === 'SUCCEEDED').length}/${counted} hedef · ${run.result}`;
   } else if (run.phase === 'stopped') line = 'Koşu durduruldu';
   else if (run.phase === 'error') line = run.message || 'Hata';
   $('runGoal').textContent = line;
@@ -566,9 +641,12 @@ function renderRun() {
       const r = results[i];
       let cls = '';
       if (r === 'SUCCEEDED') cls = 'ok';
+      else if (r === 'CANCELED') cls = 'skip';
       else if (r) cls = 'bad';
       else if (going && run.goal === i + 1) cls = 'cur';
-      bars.appendChild(el('span', cls));
+      const bar = el('span', cls);
+      bar.title = `Hedef ${labels[i] || i + 1}${r ? ': ' + r : ''}`;
+      bars.appendChild(bar);
     }
   }
 
@@ -619,6 +697,7 @@ function applyLive(snap) {
     : state.run.scenario !== undefined ? state.run.scenario : null;
   state.live.trail = snap.trail || [];
   state.live.plan = snap.plan || [];
+  state.live.boxes = snap.boxes || [];
   state.live.pose = snap.pose || null;  // poseAt 0: yeni konum gelene kadar bayat sayılır
   if (snap.status) setStatus(snap.status);
   if (snap.map) setMap(snap.map);
@@ -721,6 +800,261 @@ function renderMetrics() {
   setMetric('mSpeed', p && p.v !== null ? `${p.v.toFixed(2)} m/s` : '–');
   setMetric('mClusters', p && p.clusters !== null ? String(p.clusters) : '–');
   setMetric('mRec', st ? String(st.recoveries) : '–', '', st && st.state === 'recovering' ? 'warn' : '');
+}
+
+// --- Harita araçları (müdahale) ------------------------------------------------------------
+// Hedef ver: tıkla (ve yön için sürükle) -> /api/goal; senaryo koşusunda kalan görev iptal
+// edileceğinden önce onay istenir. Engel at: tıkla -> /api/obstacle; atılmış kutuya tıklamak onu
+// kaldırır. Denetimleri sunucu yapar (oda dışı, duvar, robota yakın…), iletisi araç çubuğunda.
+
+// Araçlar yalnızca panelin kendi koşusunda, görev hedef alabilir durumdayken (Nav2 hazır) açık.
+function toolsReady() {
+  const st = state.live.status;
+  return state.mode === 'live' && Boolean(state.connected) && state.run.phase === 'running' &&
+    Boolean(st) && st.run_id === state.run.run_id && READY.has(st.state) && liveShown();
+}
+
+function setTool(tool) {
+  state.tool = tool;
+  store('panel.tool', tool);
+  state.drag = null;
+  closeConfirm();
+  renderTools();
+}
+
+// Araç çubuğundaki geçici ileti (ör. sunucunun reddi); 6 s sonra araç ipucuna döner.
+function toolNote(text, bad) {
+  state.toolMsg = {text, bad: Boolean(bad), until: Date.now() + 6000};
+  renderTools();
+}
+
+function renderTools() {
+  const ready = toolsReady();
+  document.querySelectorAll('#toolbar [data-tool]').forEach((b) => {
+    const on = b.dataset.tool === state.tool;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+    b.disabled = !ready;
+  });
+  const n = state.live.boxes.length;
+  setText($('boxCount'), n ? ` (${n})` : '');
+  $('clearBoxes').disabled = !ready || !n || state.toolBusy;
+  $('map').classList.toggle('tool', ready);
+  if (!ready) {
+    state.drag = null;
+    if (state.pendingGoal) closeConfirm();
+  }
+  const m = state.toolMsg;
+  let text;
+  let bad = false;
+  if (m && Date.now() < m.until) ({text, bad} = m);
+  else if (state.toolBusy) text = 'Gönderiliyor…';
+  else if (ready) text = TOOL_HINTS[state.tool];
+  else if (externalStatus()) text = 'Panel dışından başlatılan görev yalnızca izlenir.';
+  else if (state.run.phase === 'starting' || state.run.phase === 'running') {
+    text = 'Araçlar Nav2 hazır olunca açılır.';
+  } else text = 'Araçlar panelden başlatılan koşuda açılır.';
+  const msg = $('toolMsg');
+  setText(msg, text);
+  msg.title = text;  // tek satıra sığmazsa tamamı ipucunda
+  msg.classList.toggle('bad', bad);
+}
+
+function toWorld(e) {
+  const T = state.mapT;
+  if (!T) return null;
+  const r = $('map').getBoundingClientRect();
+  return [T.wx(e.clientX - r.left), T.wy(e.clientY - r.top)];
+}
+
+function snap(v) {
+  return Math.round(Math.round(v / BOX_SNAP) * BOX_SNAP * 100) / 100;
+}
+
+function boxAt(p) {
+  return state.live.boxes.find((b) => Math.abs(p[0] - b.x) <= b.size[0] / 2 &&
+    Math.abs(p[1] - b.y) <= b.size[1] / 2) || null;
+}
+
+// Hedefin yönü (rad): yeterince sürüklendiyse sürükleme yönü, değilse robottan hedefe geliş yönü.
+function dragYaw(a, b) {
+  if (Math.hypot(b[0] - a[0], b[1] - a[1]) >= DRAG_MIN) return Math.atan2(b[1] - a[1], b[0] - a[0]);
+  const p = state.live.pose;
+  return p ? Math.atan2(a[1] - p.y, a[0] - p.x) : 0;
+}
+
+function onMapDown(e) {
+  if (e.button !== 0 || !toolsReady() || state.toolBusy) return;
+  const p = toWorld(e);
+  if (!p) return;
+  e.preventDefault();
+  if (state.tool === 'goal') {
+    closeConfirm();
+    state.drag = {a: p, b: p};
+    $('map').setPointerCapture(e.pointerId);
+  } else {
+    const box = boxAt(p);
+    if (box) removeBoxes(box.name);
+    else throwBox(snap(p[0]), snap(p[1]));
+  }
+  redraw();
+}
+
+function onMapMove(e) {
+  state.hover = toWorld(e);
+  if (state.drag && state.hover) state.drag.b = state.hover;
+  if (toolsReady()) redraw();
+}
+
+function onMapUp() {
+  const d = state.drag;
+  if (!d) return;
+  state.drag = null;
+  proposeGoal(d.a[0], d.a[1], dragYaw(d.a, d.b) * 180 / Math.PI);
+}
+
+// Senaryo koşusunda elle hedef görevin kalanını iptal eder: önce onay. Serbest sürüşte hemen gider.
+function proposeGoal(x, y, yaw) {
+  const g = {x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, yaw: Math.round(yaw)};
+  if (state.run.mode === 'interactive') {
+    sendGoal(g);
+    return;
+  }
+  const st = state.live.status;
+  const left = st ? st.goal_count - st.goal_results.length : 0;  // yürütülen dahil
+  state.pendingGoal = g;
+  const text = `Kalan görev iptal edilecek (${left} hedef); robot ` +
+    `(${g.x.toFixed(2)}, ${g.y.toFixed(2)}) noktasına gidecek.`;
+  $('confirmText').textContent = text;
+  $('confirmText').title = text;  // dar ekranda kısalırsa tamamı ipucunda
+  // Onay çubuğu araç çubuğunun yerine geçer (aynı yükseklikte; dar ekranda o iki satır): harita
+  // kaymaz.
+  $('confirmBar').style.minHeight = `${$('toolbar').offsetHeight}px`;
+  $('toolbar').style.display = 'none';
+  $('confirmBar').style.display = '';
+  $('confirmGo').focus();
+  redraw();
+}
+
+function closeConfirm() {
+  if (!state.pendingGoal && $('confirmBar').style.display === 'none') return;
+  state.pendingGoal = null;
+  $('confirmBar').style.display = 'none';
+  $('toolbar').style.display = state.mode === 'live' ? '' : 'none';
+  redraw();
+}
+
+// Araç isteği: yolda iken araçlar kilitli; ret iletisi araç çubuğunda ve olay akışında.
+async function toolRequest(run) {
+  state.toolBusy = true;
+  state.toolMsg = null;
+  renderTools();
+  try {
+    await run();
+  } catch (e) {
+    toolNote(e.message, true);
+    note(e.message, 'WARN');
+  } finally {
+    state.toolBusy = false;
+    renderTools();
+    redraw();
+  }
+}
+
+function sendGoal(g) {
+  closeConfirm();
+  return toolRequest(async () => {
+    const r = await post('/api/goal', {x: g.x, y: g.y, yaw_deg: g.yaw});
+    note(`Elle hedef gönderildi: (${r.x.toFixed(2)}, ${r.y.toFixed(2)}), yön ${Math.round(r.yaw_deg)}°`);
+  });
+}
+
+function throwBox(x, y) {
+  return toolRequest(async () => {
+    const b = await post('/api/obstacle', {x, y});
+    note(`Kutu atıldı: ${b.name} (${b.x.toFixed(2)}, ${b.y.toFixed(2)})`);
+  });
+}
+
+function removeBoxes(name) {
+  return toolRequest(async () => {
+    const r = await post('/api/obstacle', name ? {name} : {}, 'DELETE');
+    if (r.removed.length) {
+      note(`Kutu kaldırıldı: ${r.removed.join(', ')}`);
+      // toolRequest iletiyi silmesin diye istek bittikten sonra
+      setTimeout(() => toolNote(GHOST_NOTE, false), 0);
+    }
+  });
+}
+
+// Atılan kutular: dolu, kendi renginde (Gazebo'dakiyle aynı ton).
+function drawBoxes(T, boxes, color, outline) {
+  const x = T.x;
+  x.save();
+  boxes.forEach((b) => {
+    const [w, h] = b.size;
+    const X = T.X(b.x - w / 2);
+    const Y = T.Y(b.y + h / 2);
+    x.fillStyle = color;
+    x.fillRect(X, Y, w * T.k, h * T.k);
+    if (outline) {
+      x.strokeStyle = outline;
+      x.lineWidth = 2;
+      x.strokeRect(X, Y, w * T.k, h * T.k);
+    }
+  });
+  x.restore();
+}
+
+// Hedef önizlemesi: halka ve yön oku.
+function drawGoalArrow(T, [px, py], yaw, color) {
+  const x = T.x;
+  const r = 0.25 * T.k;
+  const ax = T.X(px);
+  const ay = T.Y(py);
+  const ex = ax + Math.cos(yaw) * 0.55 * T.k;
+  const ey = ay - Math.sin(yaw) * 0.55 * T.k;
+  x.save();
+  x.strokeStyle = color;
+  x.fillStyle = color;
+  x.lineWidth = 2;
+  x.beginPath();
+  x.arc(ax, ay, r, 0, 2 * Math.PI);
+  x.moveTo(ax, ay);
+  x.lineTo(ex, ey);
+  x.stroke();
+  x.beginPath();
+  x.moveTo(ex, ey);
+  x.lineTo(ex - Math.cos(yaw - 0.5) * 8, ey + Math.sin(yaw - 0.5) * 8);
+  x.lineTo(ex - Math.cos(yaw + 0.5) * 8, ey + Math.sin(yaw + 0.5) * 8);
+  x.closePath();
+  x.fill();
+  x.restore();
+}
+
+// Canlı haritanın üstünde aracın önizlemesi: sürüklenen ya da onay bekleyen hedef, fare altındaki
+// kutu (atılmış kutunun üstündeyse kaldırılacağını gösteren çerçeve).
+function drawToolOverlay(T) {
+  if (!toolsReady()) return;
+  const manual = cssVar('--map-manual');
+  if (state.drag) {
+    drawGoalArrow(T, state.drag.a, dragYaw(state.drag.a, state.drag.b), manual);
+  } else if (state.pendingGoal) {
+    const g = state.pendingGoal;
+    drawGoalArrow(T, [g.x, g.y], g.yaw * Math.PI / 180, manual);
+  } else if (state.hover && state.tool === 'box' && !state.toolBusy) {
+    const hit = boxAt(state.hover);
+    const x = T.x;
+    if (hit) {
+      drawBoxes(T, [hit], 'transparent', cssVar('--text-primary'));
+    } else {
+      x.save();
+      x.globalAlpha = 0.45;
+      drawBoxes(T, [{x: snap(state.hover[0]), y: snap(state.hover[1]), size: [0.4, 0.4]}],
+        cssVar('--map-thrown'));
+      x.restore();
+    }
+  }
 }
 
 // --- Geçmiş koşular ------------------------------------------------------------------------
@@ -832,6 +1166,7 @@ function runRow(run) {
   tr.appendChild(date);
   tr.appendChild(el('td', 'scn', `S${run.scenario}`));
   const task = el('td', 'task', runName(run));
+  if (run.mode === 'interactive') task.appendChild(el('span', 'pill', 'serbest sürüş'));
   if (isFresh(run)) task.appendChild(el('span', 'pill', 'az önce'));
   if (!run.files.trajectory) task.appendChild(el('span', 'pill warn', 'yörünge yok'));
   tr.appendChild(task);
@@ -1034,7 +1369,8 @@ function runTag(run) {
 }
 
 function shortName(run) {
-  return `S${run.scenario} · ${shortLabel(run.label)} · ${runTag(run)}`;
+  const free = run.mode === 'interactive' ? ' serbest' : '';
+  return `S${run.scenario}${free} · ${shortLabel(run.label)} · ${runTag(run)}`;
 }
 
 function recordText(run) {
@@ -1086,7 +1422,9 @@ function pickRow(run) {
   const date = el('td', 'c-date', shortDate(run.timestamp));
   date.title = run.timestamp || '';
   tr.appendChild(date);
-  tr.appendChild(el('td', 'scn', `S${run.scenario}`));
+  const scn = el('td', 'scn', `S${run.scenario}`);
+  if (run.mode === 'interactive') scn.appendChild(el('span', 'pill', 'serbest'));
+  tr.appendChild(scn);
   tr.appendChild(el('td', 'pvar', run.label));  // seçicide dar ekranda da görünür
   const reached = run.goal_count !== null ? `${run.goals_reached}/${run.goal_count}` : '';
   tr.appendChild(el('td', isSuccess(run) ? 'ok' : 'bad',
@@ -1144,8 +1482,13 @@ async function loadTrack(run) {
   }
   R.pending[run.id] = true;
   try {
-    const pts = (await getJson(`/api/runs/${runPath(run.id)}/trajectory`)).pts;
-    R.tracks[run.id] = buildTrack(run, pts);
+    // Olay kaydı yoksa ya da okunamazsa koşu olaysız oynar (yörünge yeter).
+    const [traj, events] = await Promise.all([
+      getJson(`/api/runs/${runPath(run.id)}/trajectory`),
+      run.files.events ? getJson(`/api/runs/${runPath(run.id)}/events`).then((d) => d.events)
+        .catch(() => []) : [],
+    ]);
+    R.tracks[run.id] = buildTrack(run, traj.pts, events);
   } catch (e) {
     R.errors[run.id] = e.message;
   } finally {
@@ -1154,17 +1497,50 @@ async function loadTrack(run) {
   if (pickedIds().includes(run.id)) renderReplayAll(false);
 }
 
-// Yörüngeden türetilenler: birikimli yol, hedeflerin bitiş anları (goals.csv sürelerinin birikimli
-// toplamı; hedefler ardışık gönderilir), hareket aralıkları (iki kayıt arası ≤ HOLD_GAP), en uzun
-// takılma ve duraklama. end: zaman ekseninin sonu (robot sonda dururken kayıt yazılmaz).
-function buildTrack(run, pts) {
+// Olay kaydından: atılan kutular (görünür oldukları aralıkla), elle hedeflerin verildiği an
+// (sırası -> t) ve zaman çizelgesindeki işaretler.
+function trackEvents(events) {
+  const boxes = new Map();
+  const given = new Map();
+  const marks = [];
+  events.forEach((e) => {
+    if (e.type === 'spawn' && typeof e.x === 'number' && typeof e.y === 'number') {
+      const size = Array.isArray(e.size) && e.size.length >= 2 ? e.size : [0.4, 0.4];
+      boxes.set(e.name, {name: e.name, x: e.x, y: e.y, size, from: e.t, to: Infinity});
+      marks.push({t: e.t, kind: 'spawn'});
+    } else if (e.type === 'delete' && boxes.has(e.name)) {
+      boxes.get(e.name).to = e.t;
+      marks.push({t: e.t, kind: 'delete'});
+    } else if (e.type === 'goal' && Number.isInteger(e.index)) {
+      given.set(e.index, e.t);
+      marks.push({t: e.t, kind: 'goal'});
+    }
+  });
+  return {boxes: [...boxes.values()], given, marks};
+}
+
+// Yörüngeden ve olay kaydından türetilenler: birikimli yol; hedeflerin başlangıç ve bitiş anları
+// (elle hedef olay anında başlar, senaryonunki öncekinin bitişinde: hedefler ardışık gönderilir;
+// bitiş başlangıç + goals.csv'deki süre); hedef etiketleri (1, 2… ve elle E1, E2…); atılan kutular;
+// hareket aralıkları (iki kayıt arası ≤ HOLD_GAP), en uzun takılma ve duraklama. end: zaman
+// ekseninin sonu (robot sonda dururken kayıt yazılmaz).
+function buildTrack(run, pts, events) {
   const cum = [0];
   for (let i = 1; i < pts.length; i++) {
     cum.push(cum[i - 1] + Math.hypot(pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]));
   }
+  const ev = trackEvents(events || []);
   const goals = run.goals.slice().sort((a, b) => a.index - b.index);
-  let sum = 0;
-  const ends = goals.map((g) => (sum += g.duration_s || 0));
+  const manual = goals.map((g) => ev.given.has(g.index));
+  const starts = [];
+  let prev = 0;
+  const ends = goals.map((g, k) => {
+    const start = manual[k] ? ev.given.get(g.index) : prev;
+    starts.push(start);
+    prev = start + (g.duration_s || 0);
+    return prev;
+  });
+  const labels = goalLabels(goals.map((g, k) => [g.x, g.y, g.yaw, manual[k] ? 'panel' : '']));
   const last = pts.length ? pts[pts.length - 1][0] : 0;
   const duration = run.duration_s !== null ? run.duration_s : last;
   const end = Math.max(duration, last);
@@ -1177,7 +1553,8 @@ function buildTrack(run, pts) {
     if (m && m[1] >= a) m[1] = b;
     else moving.push([a, b]);
   }
-  return {run, pts, cum, ends, duration, end, moving,
+  return {run, pts, cum, goals, manual, labels, starts, ends, duration, end, moving,
+    boxes: ev.boxes, marks: ev.marks,
     results: goals.map((g) => g.result), recov: goals.map((g) => g.recoveries || 0),
     stuck: longestDwell(pts, end), pause: longestPause(pts, end)};
 }
@@ -1250,23 +1627,26 @@ function heading(pts, i) {
 }
 
 // Koşu kartındaki anlık durum: [metin, sınıf]. Sıra taslaktaki gibi: bitti, az önce biten hedefin
-// sonucu, uzun hareketsizlik, yürütülen hedef.
+// sonucu (iptal edilen gösterilmez: yerine gelen hedef yürütülüyor), uzun hareketsizlik, yürütülen
+// hedef. İptal edilen hedefler (CANCELED) hedef sayısına girmez (goal_count da öyle).
 function runStatus(tr, s, t) {
-  const n = tr.run.goal_count || tr.results.length;
+  const n = tr.run.goal_count !== null ? tr.run.goal_count
+    : tr.results.filter((r) => r !== 'CANCELED').length;
   if (t >= tr.duration) {
     const ok = tr.results.filter((r) => r === 'SUCCEEDED').length;
     return [`Bitti · ${ok}/${n} hedef`, ok === n ? 'ok' : 'bad'];
   }
   for (let k = 0; k < tr.ends.length; k++) {
-    if (tr.ends[k] <= t && t - tr.ends[k] < RESULT_HOLD) {
+    if (tr.ends[k] <= t && t - tr.ends[k] < RESULT_HOLD && tr.results[k] !== 'CANCELED') {
       const r = tr.results[k] || 'sonuç yok';
       const rec = tr.recov[k] ? ` · ${tr.recov[k]} kurtarma` : '';
-      return [`Hedef ${k + 1}: ${r}${rec}`, r === 'SUCCEEDED' ? 'ok' : 'bad'];
+      return [`Hedef ${tr.labels[k]}: ${r}${rec}`, r === 'SUCCEEDED' ? 'ok' : 'bad'];
     }
   }
   if (s.hold > HOLD_RING) return [`Hareketsiz · ${Math.round(s.hold)} s`, 'warn'];
-  const gi = tr.ends.findIndex((e) => t < e);
-  return [gi >= 0 ? `Hedef ${gi + 1} yolunda` : 'Yolda', ''];
+  const gi = tr.ends.findIndex((e, k) => tr.starts[k] <= t && t < e);
+  if (gi >= 0) return [`Hedef ${tr.labels[gi]} yolunda`, ''];
+  return [tr.run.mode === 'interactive' ? 'Hedef bekleniyor' : 'Yolda', ''];
 }
 
 // --- Koşu kartları ve fark ------------------------------------------------------------------
@@ -1395,9 +1775,22 @@ function renderDiff() {
     } else if (pause.d <= HOLD_GAP) {
       text = ' takılmadan, duraksamadan ilerledi';
     }
-    const failed = tr.run.goals.filter((g) => g.result !== 'SUCCEEDED').map((g) =>
-      `hedef ${g.index} ${g.result}` + (g.recoveries ? ` (${g.recoveries} kurtarma)` : ''));
+    const failed = [];
+    tr.goals.forEach((g, k) => {
+      if (g.result !== 'SUCCEEDED' && g.result !== 'CANCELED') {
+        failed.push(`hedef ${tr.labels[k]} ${g.result}` +
+          (g.recoveries ? ` (${g.recoveries} kurtarma)` : ''));
+      }
+    });
     if (failed.length) text += `; ${failed.join(', ')}`;
+    // Panelin müdahaleleri (olay kaydından).
+    const given = tr.manual.filter(Boolean).length;
+    const canceled = tr.results.filter((r) => r === 'CANCELED').length;
+    const parts = [];
+    if (tr.boxes.length) parts.push(`${tr.boxes.length} kutu atıldı`);
+    if (given) parts.push(`${given} elle hedef`);
+    if (canceled) parts.push(`${canceled} hedef iptal`);
+    if (parts.length) text += `; ${parts.join(', ')}`;
     item({id: tr.run.id}, text);
   });
   if (tracks.length >= 2) {
@@ -1554,7 +1947,8 @@ function drawTimeline() {
   const runs = pickedRuns();
   const font = getComputedStyle(document.body).fontFamily;
   const ink = {primary: cssVar('--text-primary'), secondary: cssVar('--text-secondary'),
-    muted: cssVar('--text-muted'), bad: cssVar('--map-bad')};
+    muted: cssVar('--text-muted'), bad: cssVar('--map-bad'), manual: cssVar('--map-manual'),
+    thrown: cssVar('--map-thrown')};
   x.font = `12px ${font}`;
   x.textBaseline = 'middle';
   if (!runs.length) {
@@ -1588,8 +1982,31 @@ function drawTimeline() {
       x.globalAlpha = base;
       tr.moving.forEach(([a, b]) => x.fillRect(sx(a), y + 6, Math.max(1, sx(b) - sx(a)), TL.row - 12));
       tr.ends.forEach((e, k) => {
-        x.fillStyle = tr.results[k] === 'SUCCEEDED' ? ink.primary : ink.bad;
+        const r = tr.results[k];
+        x.fillStyle = r === 'SUCCEEDED' ? ink.primary : r === 'CANCELED' ? ink.muted : ink.bad;
         x.fillRect(sx(e) - 1, y + 2, 2, TL.row - 4);
+      });
+      // Panelin müdahaleleri bandın altında: kutu atıldı (dolu kare), kaldırıldı (boş kare),
+      // elle hedef (üçgen).
+      tr.marks.forEach((m) => {
+        const X = sx(Math.max(0, m.t));
+        const Y = y + TL.row - 4;
+        if (m.kind === 'goal') {
+          x.fillStyle = ink.manual;
+          x.beginPath();
+          x.moveTo(X, Y - 5);
+          x.lineTo(X + 4, Y + 2);
+          x.lineTo(X - 4, Y + 2);
+          x.closePath();
+          x.fill();
+        } else if (m.kind === 'spawn') {
+          x.fillStyle = ink.thrown;
+          x.fillRect(X - 3, Y - 3, 6, 6);
+        } else {
+          x.strokeStyle = ink.thrown;
+          x.lineWidth = 1.5;
+          x.strokeRect(X - 2.5, Y - 2.5, 5, 5);
+        }
       });
     }
     x.globalAlpha = 1;
@@ -1644,26 +2061,48 @@ function extentOf(tracks, goals) {
   return x0 === Infinity ? null : [x0 - 0.5, y0 - 0.5, x1 + 0.5, y1 + 0.5];
 }
 
-// Koşunun hedefleri: konum goals.csv'den (yoksa senaryodan), sonuç goals.csv'den.
+// Koşunun hedefleri [x, y, yaw]: goals.csv'den (elle verilenler ve iptal edilenler dahil), yoksa
+// senaryodan.
 function runGoals(run) {
+  const known = run.goals.filter((g) => g.x !== null && g.y !== null)
+    .sort((a, b) => a.index - b.index);
+  if (known.length) return known.map((g) => [g.x, g.y, g.yaw || 0]);
   const s = scenarioById(run.scenario);
-  const n = run.goal_count || run.goals.length || (s ? s.goals.length : 0);
-  const goals = [];
-  const results = [];
-  for (let i = 0; i < n; i++) {
-    const g = run.goals.find((x) => x.index === i + 1);
-    const d = s ? s.goals[i] : null;
-    if (g && g.x !== null && g.y !== null) goals.push([g.x, g.y, g.yaw || 0]);
-    else if (d) goals.push(d);
-    else continue;
-    results.push(g ? g.result : null);
-  }
-  return {goals, results};
+  return s ? s.goals : [];
 }
 
-// Seçili koşular t anında: dünya, hareketli kutuların şeritleri, hedefler, her koşunun o ana kadarki
-// izi ve hayalet robotu (numaralı); 4 s'den uzun hareketsizlikte robotun çevresinde halka (oynarken
-// yanıp söner). Tek koşu görünürken hedefler bittikleri andan itibaren sonucuyla renklenir.
+// Tekrar oynatmada hedef işaretleri. Tek koşu görünürken hedefleri bittikleri andan itibaren
+// sonucuyla renklenir, elle verilenler verildikleri anda belirir. Çoklu seçimde ilk koşunun
+// senaryo hedefleri nötr, her koşunun elle hedefleri kendi renginde (verildikleri andan itibaren).
+function replayGoalMarks(runs, shown, t) {
+  const R = state.replay;
+  const first = R.tracks[runs[0].id];
+  if (shown.length === 1) {
+    const tr = shown[0];
+    const goals = tr.goals.map((g, k) => [g.x, g.y, g.yaw || 0, tr.manual[k] ? 'panel' : '']);
+    const results = tr.results.map((r, k) => (tr.ends[k] <= t ? r : null));
+    const gi = tr.ends.findIndex((e, k) => tr.starts[k] <= t && t < e);
+    const current = gi >= 0 && t < tr.duration ? gi + 1 : null;
+    return goalMarks(goals, results, current, true).filter((m, k) => !tr.manual[k] || tr.starts[k] <= t);
+  }
+  const base = first ? first.goals.filter((g, k) => !first.manual[k]).map((g) => [g.x, g.y, g.yaw || 0])
+    : runGoals(runs[0]);
+  const marks = goalMarks(base, [], null, true);
+  shown.forEach((tr) => {
+    const color = cssVar(`--run-${R.colors[tr.run.id] + 1}`);
+    tr.goals.forEach((g, k) => {
+      if (tr.manual[k] && tr.starts[k] <= t) {
+        marks.push({x: g.x, y: g.y, yaw: g.yaw || 0, label: tr.labels[k], color, width: 2,
+          dash: tr.results[k] === 'CANCELED' && tr.ends[k] <= t});
+      }
+    });
+  });
+  return marks;
+}
+
+// Seçili koşular t anında: dünya, hareketli kutuların şeritleri, atılan kutular (atıldıkları andan
+// kaldırıldıkları ana kadar), hedefler, her koşunun o ana kadarki izi ve hayalet robotu (numaralı);
+// 4 s'den uzun hareketsizlikte robotun çevresinde halka (oynarken yanıp söner).
 function drawReplay(cv) {
   const R = state.replay;
   const bg = cssVar('--surface-1');
@@ -1672,8 +2111,7 @@ function drawReplay(cv) {
   const geometry = R.world !== '?' ? state.worlds[R.world] : null;
   const tracks = runs.map((r) => R.tracks[r.id]).filter(Boolean);
   const shown = tracks.filter((tr) => !R.hidden[tr.run.id]);
-  const {goals} = runGoals(runs[0]);
-  const bounds = geometry ? geometry.bounds : extentOf(tracks, goals);
+  const bounds = geometry ? geometry.bounds : extentOf(tracks, runGoals(runs[0]));
   const T = setupCanvas(cv, bounds, bg);
   if (!T) return null;
   const t = R.t;
@@ -1683,15 +2121,14 @@ function drawReplay(cv) {
     const mover = runs.map((r) => scenarioById(r.scenario)).find((s) => s && s.moving_obstacles.length);
     if (mover) drawLanes(T, geometry, mover);  // konum kaydı yok (P8)
   }
-  let results = [];
-  let current = null;
-  if (shown.length === 1) {
-    const tr = shown[0];
-    results = tr.results.map((r, k) => (tr.ends[k] <= t ? r : null));
-    const gi = tr.ends.findIndex((e) => t < e);
-    current = gi >= 0 && t < tr.duration ? gi + 1 : null;
-  }
-  drawGoals(T, goals, results, current, true);
+  const thrown = cssVar('--map-thrown');
+  shown.forEach((tr) => {
+    const boxes = tr.boxes.filter((b) => b.from <= t && t < b.to);
+    // Birden çok koşu görünürken kutunun hangi koşuya ait olduğu kenar rengiyle.
+    const edge = shown.length > 1 ? cssVar(`--run-${R.colors[tr.run.id] + 1}`) : null;
+    drawBoxes(T, boxes, thrown, edge);
+  });
+  drawGoalMarks(T, replayGoalMarks(runs, shown, t), true);
   if (tracks.length && tracks[0].pts.length) {
     drawStart(T, tracks[0].pts[0][1], tracks[0].pts[0][2], cssVar('--text-muted'));
   }
@@ -1792,12 +2229,14 @@ function setupCanvas(cv, bounds, bg) {
   const k = Math.min(w / (x1 - x0 + 2 * pad), h / (y1 - y0 + 2 * pad));
   const ox = (w - (x1 - x0) * k) / 2 - x0 * k;
   const oy = (h + (y1 - y0) * k) / 2 + y0 * k;
-  return {x, w, h, k, X: (v) => ox + v * k, Y: (v) => oy - v * k};
+  return {x, w, h, k, X: (v) => ox + v * k, Y: (v) => oy - v * k,
+    wx: (px) => (px - ox) / k, wy: (py) => (oy - py) / k};  // piksel -> dünya (fare)
 }
 
 // Dünyayı, görevin hedeflerini ve robotu çizer. live verilirse (canlı önbellek) sis, SLAM
-// haritası, iz, plan, hareketli kutuların konumu ve robotun gerçek konumu da çizilir.
-function drawWorld(cv, geometry, scenario, detailed, live) {
+// haritası, atılan kutular, iz, plan, hareketli kutuların konumu ve robotun gerçek konumu da
+// çizilir. goals verilmezse senaryonun hedefleri.
+function drawWorld(cv, geometry, scenario, detailed, live, goals) {
   const T = setupCanvas(cv, geometry ? geometry.bounds : null,
     cssVar(detailed ? '--surface-1' : '--surface-2'));
   if (!T) return null;
@@ -1808,6 +2247,7 @@ function drawWorld(cv, geometry, scenario, detailed, live) {
   if (scenario && detailed) drawLanes(T, geometry, scenario);
   const st = live ? live.status : null;
   if (live) {
+    drawBoxes(T, live.boxes, cssVar('--map-thrown'));
     const going = st && MOVING.has(st.state);
     const trail = live.trail.slice();
     if (going && live.pose && trail.length) trail.push([live.pose.x, live.pose.y]);
@@ -1815,7 +2255,8 @@ function drawWorld(cv, geometry, scenario, detailed, live) {
     if (going) drawLine(T, live.plan, cssVar('--map-robot'), 1.5, [5, 4]);
   }
   if (scenario) {
-    drawGoals(T, scenario.goals, st ? st.goal_results : [], st ? st.goal_index : null, detailed);
+    drawGoals(T, goals || scenario.goals, st ? st.goal_results : [], st ? st.goal_index : null,
+      detailed);
   }
   const p = live ? live.pose : null;
   drawRobot(T, p ? [p.x, p.y, p.th] : [0, 0, null], detailed);
@@ -1924,32 +2365,53 @@ function drawLine(T, pts, color, width, dash) {
   x.restore();
 }
 
-// Hedefler: varılan yeşil, başarısız kırmızı, yürütülen kalın; ayrıntılıda yön çizgisi ve numara.
-function drawGoals(T, goals, results, current, detailed) {
+// Hedef işaretleri: halka; ayrıntılıda yön çizgisi ve etiket. m: {x, y, yaw (derece), label,
+// color, width, dash}.
+function drawGoalMarks(T, marks, detailed) {
   const x = T.x;
-  const colors = {goal: cssVar('--map-goal'), ok: cssVar('--map-ok'), bad: cssVar('--map-bad')};
+  const r = 0.25 * T.k;
+  x.save();
   x.font = `500 11px ${getComputedStyle(document.body).fontFamily}`;
-  goals.forEach((g, i) => {
-    const r = 0.25 * T.k;
-    const cx = T.X(g[0]);
-    const cy = T.Y(g[1]);
-    const res = results[i];
-    const color = res === 'SUCCEEDED' ? colors.ok : res ? colors.bad : colors.goal;
-    x.strokeStyle = color;
-    x.lineWidth = !detailed ? 1.5 : current === i + 1 ? 3 : 2;
+  marks.forEach((m) => {
+    const cx = T.X(m.x);
+    const cy = T.Y(m.y);
+    x.strokeStyle = m.color;
+    x.lineWidth = m.width;
+    x.setLineDash(m.dash ? [3, 3] : []);
     x.beginPath();
     x.arc(cx, cy, r, 0, 2 * Math.PI);
     x.stroke();
     if (detailed) {
-      const a = g[2] * Math.PI / 180;
+      const a = m.yaw * Math.PI / 180;
+      x.setLineDash([]);
       x.beginPath();
       x.moveTo(cx, cy);
       x.lineTo(cx + Math.cos(a) * r, cy - Math.sin(a) * r);
       x.stroke();
-      x.fillStyle = color;
-      x.fillText(String(i + 1), cx + r + 2, cy - r + 4);
+      x.fillStyle = m.color;
+      x.fillText(m.label, cx + r + 2, cy - r + 4);
     }
   });
+  x.restore();
+}
+
+// Görevin hedefleri ([x, y, yaw, kaynak]): varılan yeşil, başarısız kırmızı, iptal edilen gri ve
+// kesikli, yürütülen kalın; elle verilenler (kaynak 'panel') kendi renginde, E1, E2… etiketli.
+function goalMarks(goals, results, current, detailed) {
+  const c = {goal: cssVar('--map-goal'), manual: cssVar('--map-manual'), ok: cssVar('--map-ok'),
+    bad: cssVar('--map-bad'), muted: cssVar('--text-muted')};
+  const labels = goalLabels(goals);
+  return goals.map((g, i) => {
+    const res = results[i];
+    const color = res === 'SUCCEEDED' ? c.ok : res === 'CANCELED' ? c.muted : res ? c.bad
+      : g[3] === 'panel' ? c.manual : c.goal;
+    return {x: g[0], y: g[1], yaw: g[2], label: labels[i], color, dash: res === 'CANCELED',
+      width: !detailed ? 1.5 : current === i + 1 ? 3 : 2};
+  });
+}
+
+function drawGoals(T, goals, results, current, detailed) {
+  drawGoalMarks(T, goalMarks(goals, results || [], current, detailed), detailed);
 }
 
 // Robot: th null ise yalnızca doğduğu nokta, değilse yönünü gösteren çizgiyle canlı konum.
@@ -1991,11 +2453,19 @@ function drawMap() {
     const s = state.mode === 'live' ? scenarioById(state.scenario) : null;
     const geometry = s ? state.worlds[baseName(s.world)] : null;
     const live = geometry && liveShown() ? state.live : null;
-    view = drawWorld(cv, geometry, s, true, live);
+    // Hedefler görevin kuyruğundan (elle hedefler dahil); serbest sürüşte senaryonunkiler yok.
+    const free = ACTIVE.has(state.run.phase) || live ? state.run.mode === 'interactive' : state.free;
+    const st = live && live.status;
+    const goals = st && Array.isArray(st.goals) ? st.goals : free ? [] : undefined;
+    view = drawWorld(cv, geometry, s, true, live, goals);
     if (view) kind = live ? 'live' : 'preview';
+    if (view && live) drawToolOverlay(view);
     const p = live && live.pose;
     if (p) coord = `x ${p.x.toFixed(2)} · y ${p.y.toFixed(2)} · θ ${Math.round(p.th * 180 / Math.PI)}°`;
+    const h = state.hover;
+    if (h && toolsReady()) coord = `fare ${h[0].toFixed(2)}, ${h[1].toFixed(2)}` + (coord ? ` · ${coord}` : '');
   }
+  state.mapT = kind === 'live' || kind === 'preview' ? view : null;
   if (!view) drawEmpty(cv, emptyText());
   renderMapInfo(kind);
   $('coord').textContent = coord;
@@ -2034,8 +2504,8 @@ function redraw() {
 function renderMapInfo(key) {
   if (key === state.legendKey) return;
   state.legendKey = key;
-  $('hint').textContent = {live: LIVE_HINT, replay: REPLAY_HINT, replay1: REPLAY_HINT}[key] ||
-    MODES[state.mode].hint;
+  $('hint').textContent = {live: LIVE_HINT + TOOLS_HINT, replay: REPLAY_HINT,
+    replay1: REPLAY_HINT}[key] || MODES[state.mode].hint;
   const box = $('legend');
   box.textContent = '';
   box.style.display = key === 'none' ? 'none' : '';
@@ -2070,6 +2540,8 @@ function setMode(mode) {
   $('liveTop').style.display = mode === 'live' ? '' : 'none';
   $('replayTop').style.display = replay ? '' : 'none';
   $('playbar').style.display = replay ? '' : 'none';
+  $('toolbar').style.display = mode === 'live' ? '' : 'none';
+  if (mode !== 'live') closeConfirm();
   $('tlBox').style.display = replay ? '' : 'none';
   $('runCard').style.display = replay ? 'none' : '';
   $('metrics').style.display = replay ? 'none' : '';
@@ -2105,6 +2577,37 @@ $('go').addEventListener('click', startRun);
 $('stop').addEventListener('click', stopRun);
 $('gz').addEventListener('change', renderCommand);
 $('rv').addEventListener('change', renderCommand);
+$('free').addEventListener('change', () => {
+  state.free = $('free').checked;
+  store('panel.free', state.free ? '1' : '');
+  renderCommand();
+  drawMap();
+});
+document.querySelectorAll('#toolbar [data-tool]').forEach((b) => {
+  b.addEventListener('click', () => setTool(b.dataset.tool));
+});
+$('clearBoxes').addEventListener('click', () => removeBoxes(null));
+$('confirmGo').addEventListener('click', () => {
+  if (state.pendingGoal) sendGoal(state.pendingGoal);
+});
+$('confirmNo').addEventListener('click', closeConfirm);
+const mapCanvas = $('map');
+mapCanvas.addEventListener('pointerdown', onMapDown);
+mapCanvas.addEventListener('pointermove', onMapMove);
+mapCanvas.addEventListener('pointerup', onMapUp);
+mapCanvas.addEventListener('pointercancel', () => {
+  state.drag = null;
+  redraw();
+});
+mapCanvas.addEventListener('pointerleave', () => {
+  state.hover = null;
+  if (!state.drag) redraw();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !(state.drag || state.pendingGoal)) return;
+  state.drag = null;
+  closeConfirm();
+});
 $('fWorld').addEventListener('change', () => {
   state.filter.world = $('fWorld').value;
   store('panel.runs.world', state.filter.world);
@@ -2186,6 +2689,9 @@ setInterval(refreshHealth, HEALTH_MS);
 
 state.filter.world = restore('panel.runs.world') || '';
 state.filter.result = ['ok', 'bad'].includes(restore('panel.runs.result')) ? restore('panel.runs.result') : '';
+state.free = restore('panel.free') === '1';
+$('free').checked = state.free;
+if (TOOL_HINTS[restore('panel.tool')]) state.tool = restore('panel.tool');
 restoreReplay();
 renderSpeeds();
 renderRun();
