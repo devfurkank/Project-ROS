@@ -6,7 +6,7 @@ import os
 import xml.etree.ElementTree as ET
 
 from otonom_surus.mission_manager import append_csv, PathRecorder, straight_line_length
-from otonom_surus.scenarios import load_scenario
+from otonom_surus.scenarios import load_scenario, scenario_numbers
 import pytest
 import yaml
 
@@ -29,6 +29,13 @@ def test_paketteki_her_senaryonun_dunyasi_ve_hedefleri_var():
         scenario = load_scenario(SCENARIOS, number)
         assert os.path.isfile(os.path.join(PACKAGE, 'worlds', scenario['world']))
         assert scenario['goals']
+
+
+def test_senaryo_numaralari_sirali_ve_tamsayi(tmp_path):
+    goal = {'world': 'w.world', 'goals': [[0, 0, 0]]}
+    assert scenario_numbers(write_yaml(tmp_path, {3: goal, 1: goal, 'not': goal})) == [1, 3]
+    numbers = scenario_numbers(SCENARIOS)
+    assert numbers == sorted(numbers) and {1, 2, 3, 4, 5} <= set(numbers)
 
 
 def test_senaryo1_hedefi():

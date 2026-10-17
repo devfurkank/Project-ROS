@@ -10,6 +10,13 @@ import math
 import yaml
 
 
+def scenario_numbers(path):
+    """scenarios.yaml'daki senaryo numaraları, sıralı (tamsayı olmayan anahtarlar atlanır)."""
+    with open(path, encoding='utf-8') as f:
+        scenarios = yaml.safe_load(f) or {}
+    return sorted(k for k in scenarios if isinstance(k, int))
+
+
 def load_scenario(path, number):
     """
     scenarios.yaml'dan bir senaryoyu okur.

@@ -26,8 +26,11 @@ def generate_launch_description():
             'results_dir', default_value='results/panel',
             description='Panel koşularının klasörü; göreli ise komutun çalıştırıldığı yere göre'),
         # Türler açıkça veriliyor (T16): launch_ros değerleri YAML olarak ayrıştırır.
+        # sigterm_timeout: Ctrl+C'de panel önce çalışan koşuyu durdurur (en kötü 30 + 10 + 5 s);
+        # launch'ın varsayılan 5 s'si dolup SIGTERM göndermesin.
         Node(
             package='otonom_surus', executable='panel_server', output='screen',
+            sigterm_timeout='50',
             parameters=[{
                 'port': ParameterValue(arg('port'), value_type=int),
                 'results_dir': ParameterValue(arg('results_dir'), value_type=str),

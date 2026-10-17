@@ -1,0 +1,382 @@
+"""
+Panelin alt süreçleri: launch'ı kendi süreç grubunda başlatma, çıktısını okuma, durdurma.
+
+ROS'a bağımlı değildir; birim testleri sahte komutlarla çalışır. Yöntem run_experiments.sh'deki
+gibi: launch kendi süreç grubunda (yeni oturumda) açılır; durdururken önce launch'a SIGINT,
+kapanmazsa bütün gruba SIGTERM ve SIGKILL gider. Böylece yalnızca o koşudan kalan süreçler
+ölür, kullanıcının başka oturumlarına dokunulmaz.
+
+RunManager panelden başlatılan senaryo koşusunu yönetir: tek koşu kilidi, komut, aşama, günlük,
+sonuç. Aşama süreçten ve mission_manager'ın günlük satırlarından çıkarılır:
+    idle → starting → running → finishing → finished
+                    ↘ stopping → stopped          (Durdur)
+                    ↘ error                       (launch hata koduyla bitti / sonuç yok)
+"""
+
+import collections
+import csv
+import os
+import re
+import signal
+import subprocess
+import threading
+import time
+
+LOG_LINES = 200  # yeni açılan sekmeye gönderilen son günlük satırları
+NOISE = ('screen size is bogus',)  # WSLg'nin zararsız uyarısı
+
+# Launch çıktısındaki iki satır biçimi:
+#   [mission_manager-7] [INFO] [1792226568.000105631] [mission_manager]: Hedef 1/3: (4.00, ...
+#   [ERROR] [panel_server-1]: process has died [pid 6614, exit code -9, ...]
+NODE_LOG = re.compile(
+    r'^\[(?P<proc>[^\]]+?)-\d+\] \[(?P<level>[A-Z]+)\] \[[\d.]+\] \[(?P<node>[^\]]+)\]: '
+    r'(?P<msg>.*)$')
+LAUNCH_LOG = re.compile(r'^\[(?P<level>[A-Z]+)\] \[(?P<who>[^\]]+)\]: (?P<msg>.*)$')
+WARN_LEVELS = ('WARN', 'WARNING', 'ERROR', 'FATAL')
+
+# mission_manager'ın görev satırları (mission_manager.py'deki self.info çağrıları)
+GOAL_SENT = re.compile(r'^Hedef (\d+)/(\d+): \(')
+GOAL_DONE = re.compile(r'^Hedef (\d+)/(\d+): ([A-Z]+),')
+MISSION_DONE = re.compile(r'^Görev bitti: ([A-Z]+), (\d+)/(\d+) hedef')
+
+RESULT_FIELDS = ('result', 'goals_reached', 'goal_count', 'duration_s', 'path_length_m',
+                 'path_efficiency', 'min_obstacle_dist_m', 'recoveries', 'failure_reason')
+
+
+class RunError(Exception):
+    """Koşu başlatılamadı ya da durdurulamadı; ileti kullanıcıya gösterilir."""
+
+
+def parse_line(line):
+    """
+    Launch çıktısının bir satırı → {'level', 'source', 'text'}; olay akışına gitmeyecekse None.
+
+    İletilen: mission_manager'ın her satırı, her düğümün uyarı ve hataları, launch'ın kendi
+    uyarı ve hataları (ör. "process has died"). Geri kalan her şey yalnızca günlük dosyasına.
+    """
+    if any(noise in line for noise in NOISE):
+        return None
+    m = NODE_LOG.match(line)
+    if m:
+        if m['node'] == 'mission_manager' or m['level'] in WARN_LEVELS:
+            return {'level': _level(m['level']), 'source': m['node'], 'text': m['msg']}
+        return None
+    m = LAUNCH_LOG.match(line)
+    if m and m['level'] in WARN_LEVELS:
+        return {'level': _level(m['level']), 'source': m['who'], 'text': m['msg']}
+    return None
+
+
+def _level(level):
+    return 'WARN' if level == 'WARNING' else level
+
+
+def gazebo_running():
+    """Başka bir gzserver çalışıyor mu (T2: ikincisi robotu doğuramaz, launch takılır)."""
+    return subprocess.run(['pgrep', '-x', 'gzserver'], stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL).returncode == 0
+
+
+def launch_env():
+    """Alt süreç ortamı: çıktı satır satır gelsin, renk kodu olmasın."""
+    env = dict(os.environ)
+    env.update(PYTHONUNBUFFERED='1', RCUTILS_COLORIZED_OUTPUT='0')
+    return env
+
+
+def scenario_command(scenario, gui, rviz, results_dir, run_id, scenarios_file=None):
+    """Panelin çalıştırdığı komut; terminalde aynısı yazılabilir."""
+    cmd = ['ros2', 'launch', 'otonom_surus', 'scenario.launch.py', f'scenario:={scenario}',
+           f'gui:={str(bool(gui)).lower()}', f'rviz:={str(bool(rviz)).lower()}',
+           f'results_dir:={results_dir}', f'run_id:={run_id}']
+    if scenarios_file:
+        cmd.append(f'scenarios_file:={scenarios_file}')
+    return cmd
+
+
+def find_run(results_dir, scenario, run_id):
+    """results_dir/runs.csv'de koşunun satırı (RESULT_FIELDS alanları); yoksa None."""
+    path = os.path.join(results_dir, 'runs.csv')
+    try:
+        with open(path, newline='', encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+                if row.get('scenario') == str(scenario) and row.get('run_id') == run_id:
+                    return {k: row.get(k, '') for k in RESULT_FIELDS}
+    except FileNotFoundError:
+        pass
+    return None
+
+
+class ManagedProcess:
+    """
+    Kendi süreç grubunda çalışan bir alt süreç.
+
+    Çıktı satır satır on_line'a (ve log_path'e), bitiş on_exit(returncode)'a gider. Süreç
+    kendiliğinden bitince grupta kalanlar (T22: gzserver) leftover_grace sonra öldürülür.
+    """
+
+    def __init__(self, cmd, on_line=None, on_exit=None, log_path=None, env=None, cwd=None,
+                 leftover_grace=5.0):
+        self.cmd = cmd
+        self.on_line = on_line
+        self.on_exit = on_exit
+        self.log_path = log_path
+        self.env = env
+        self.cwd = cwd
+        self.leftover_grace = leftover_grace
+        self.proc = None
+        self.pgid = None
+        self.returncode = None
+        self._log = None
+        self._log_lock = threading.Lock()
+        self._reader = None
+        self._done = threading.Event()
+
+    def start(self):
+        if self.log_path:
+            os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+            self._log = open(self.log_path, 'w', encoding='utf-8')
+        self.proc = subprocess.Popen(
+            self.cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, env=self.env, cwd=self.cwd, start_new_session=True)
+        self.pgid = self.proc.pid  # yeni oturumun lideri: grup kimliği = pid
+        self._reader = threading.Thread(target=self._read, daemon=True)
+        self._reader.start()
+        threading.Thread(target=self._watch, daemon=True).start()
+        return self
+
+    @property
+    def running(self):
+        return self.proc is not None and not self._done.is_set()
+
+    def wait(self, timeout=None):
+        """Süreç ve grup temizliği bitene kadar bekler; bittiyse True."""
+        return self._done.wait(timeout)
+
+    def group_alive(self):
+        if self.pgid is None:
+            return False
+        try:
+            os.killpg(self.pgid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def stop(self, int_timeout=30.0, term_timeout=10.0, kill_timeout=5.0):
+        """
+        Önce yalnızca lider sürece (launch) SIGINT; grup boşalmazsa gruba SIGTERM, sonra SIGKILL.
+
+        SIGINT bütün gruba gönderilmez: düğümler onu hem doğrudan hem launch'tan alıp
+        "process has died, exit code -2" ile ölüyordu. Launch'a gönderilince düğümleri kendisi
+        sırayla kapatır (run_experiments.sh'deki gibi). Dönen değer grubu boşaltan sinyalin adı;
+        grup zaten boşsa None.
+        """
+        if not self.group_alive():
+            return None
+        for sig, timeout, group in ((signal.SIGINT, int_timeout, False),
+                                    (signal.SIGTERM, term_timeout, True),
+                                    (signal.SIGKILL, kill_timeout, True)):
+            self._signal(sig, group)
+            if self._wait_group(timeout):
+                return sig.name
+        return 'SIGKILL'
+
+    def _signal(self, sig, group=True):
+        try:
+            if group:
+                os.killpg(self.pgid, sig)
+            else:
+                os.kill(self.proc.pid, sig)
+        except ProcessLookupError:
+            pass
+
+    def _wait_group(self, timeout):
+        deadline = time.monotonic() + timeout
+        while self.group_alive():
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
+        return True
+
+    def _read(self):
+        for raw in self.proc.stdout:
+            line = raw.decode('utf-8', 'replace').rstrip('\r\n')
+            with self._log_lock:
+                if self._log is not None:
+                    self._log.write(line + '\n')
+                    self._log.flush()
+            if self.on_line is not None:
+                self.on_line(line)
+
+    def _watch(self):
+        self.returncode = self.proc.wait()
+        if not self._wait_group(self.leftover_grace):
+            self._signal(signal.SIGKILL)
+            self._wait_group(5.0)
+        self._reader.join(timeout=5.0)
+        with self._log_lock:
+            if self._log is not None:
+                self._log.close()
+                self._log = None
+        try:
+            if self.on_exit is not None:
+                self.on_exit(self.returncode)
+        finally:
+            self._done.set()  # wait() geri çağrı da bittikten sonra döner
+
+
+class RunManager:
+    """
+    Panelden başlatılan senaryo koşusu (aynı anda en çok bir tane).
+
+    publish(event, data) olayları dağıtır: 'run' (aşama değişti), 'log' (günlük satırı),
+    'run_finished' (koşu sonuçlarıyla bitti). command ve gazebo_check testlerde değiştirilir.
+    """
+
+    def __init__(self, results_dir, publish, scenarios_file=None, command=scenario_command,
+                 gazebo_check=gazebo_running, cwd=None, leftover_grace=5.0):
+        self.results_dir = results_dir
+        self.publish = publish
+        self.scenarios_file = scenarios_file
+        self.command = command
+        self.gazebo_check = gazebo_check
+        self.cwd = cwd
+        self.leftover_grace = leftover_grace
+        self.process = None
+        self.log = collections.deque(maxlen=LOG_LINES)
+        self._lock = threading.Lock()
+        self._stopping = False
+        self._state = {'phase': 'idle'}
+
+    def state(self):
+        with self._lock:
+            return dict(self._state)
+
+    def recent_log(self):
+        with self._lock:
+            return list(self.log)
+
+    def start(self, scenario, gui=True, rviz=False):
+        with self._lock:
+            if self.process is not None and self.process.running:
+                raise RunError('Zaten çalışan bir koşu var; önce durdur.')
+            if self.gazebo_check():
+                raise RunError('Başka bir Gazebo (gzserver) açık; önce onu kapat.')
+            run_id = 'p' + time.strftime('%Y%m%d-%H%M%S')
+            cmd = self.command(scenario=scenario, gui=gui, rviz=rviz,
+                               results_dir=self.results_dir, run_id=run_id,
+                               scenarios_file=self.scenarios_file)
+            self._state = {
+                'phase': 'starting', 'scenario': scenario, 'run_id': run_id, 'gui': bool(gui),
+                'rviz': bool(rviz), 'command': ' '.join(cmd), 'started': time.time(),
+                'goal': None, 'goal_count': None, 'goal_results': [],
+            }
+            self._stopping = False
+            self.log.clear()
+            self.process = ManagedProcess(
+                cmd, on_line=self._on_line, on_exit=self._on_exit, env=launch_env(),
+                log_path=os.path.join(self.results_dir, 'logs', f's{scenario}_{run_id}.log'),
+                cwd=self.cwd, leftover_grace=self.leftover_grace)
+            try:
+                self.process.start()
+            except OSError as e:
+                self._state = {'phase': 'idle'}
+                raise RunError(f'Launch başlatılamadı: {e}') from None
+            state = dict(self._state)
+        self.publish('run', state)
+        return state
+
+    def stop(self):
+        """Durdurmayı başlatır ve hemen döner; bitiş 'run' olayıyla (stopped) bildirilir."""
+        with self._lock:
+            process = self.process
+            if process is None or not process.running:
+                raise RunError('Çalışan koşu yok.')
+            if self._stopping:
+                return dict(self._state)
+            self._stopping = True
+            self._state['phase'] = 'stopping'
+            state = dict(self._state)
+        self.publish('run', state)
+        threading.Thread(target=self._stop_worker, args=(process,), daemon=True).start()
+        return state
+
+    def shutdown(self, timeout=60.0):
+        """Panel kapanırken: çalışan koşuyu durdurur ve bitmesini bekler."""
+        process = self.process
+        if process is not None and process.running:
+            with self._lock:
+                self._stopping = True
+            process.stop()
+            process.wait(timeout)
+
+    def _stop_worker(self, process):
+        sig = process.stop()
+        if sig:
+            self._add_log({'level': 'INFO', 'source': 'panel', 'text': f'Koşu durduruldu ({sig})'})
+
+    def _add_log(self, entry):
+        with self._lock:
+            self.log.append(entry)
+        self.publish('log', entry)
+
+    def _on_line(self, line):
+        entry = parse_line(line)
+        if entry is None:
+            return
+        changed = None
+        if entry['source'] == 'mission_manager':
+            changed = self._track(entry['text'])
+        self._add_log(entry)
+        if changed is not None:
+            self.publish('run', changed)
+
+    def _track(self, text):
+        """mission_manager satırından aşama ve hedef bilgisi; durum değiştiyse yeni durum."""
+        with self._lock:
+            st = self._state
+            if st['phase'] not in ('starting', 'running'):
+                return None
+            m = GOAL_SENT.match(text)
+            if m:
+                st['phase'] = 'running'
+                st['goal'], st['goal_count'] = int(m[1]), int(m[2])
+                return dict(st)
+            m = GOAL_DONE.match(text)
+            if m:
+                results = st['goal_results']
+                results += [None] * (int(m[1]) - len(results))
+                results[int(m[1]) - 1] = m[3]
+                return dict(st)
+            m = MISSION_DONE.match(text)
+            if m:
+                st['phase'] = 'finishing'
+                st['result'] = m[1]
+                return dict(st)
+        return None
+
+    def _on_exit(self, returncode):
+        with self._lock:
+            st = self._state
+            st['returncode'] = returncode
+            st['ended'] = time.time()
+            row = None
+            if self._stopping:
+                st['phase'], st['message'] = 'stopped', 'Koşu durduruldu.'
+            elif returncode == 0:
+                row = find_run(self.results_dir, st['scenario'], st['run_id'])
+                if row is not None:
+                    st['phase'], st['summary'] = 'finished', row
+                    st['result'] = row['result']
+                else:
+                    st['phase'] = 'error'
+                    st['message'] = 'Launch bitti ama runs.csv’de bu koşunun satırı yok.'
+            else:
+                st['phase'], st['message'] = 'error', f'Launch {returncode} koduyla bitti.'
+            self._stopping = False
+            state = dict(st)
+        self.publish('run', state)
+        if row is not None:
+            self.publish('run_finished', state)

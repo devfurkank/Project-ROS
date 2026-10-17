@@ -76,8 +76,15 @@ class FakePanel:
         self.web_dir = web_dir
         self.broadcaster = Broadcaster()
 
-    def health(self):
+    def hello(self):
         return {'ok': True, 'version': 'test', 'clients': self.broadcaster.count()}
+
+    def api(self, method, path, body):
+        if method == 'GET' and path == '/api/health':
+            return 200, self.hello()
+        if method == 'POST' and path == '/api/echo':
+            return 201, body
+        return None
 
     def log_request(self, client, text):
         pass
@@ -100,9 +107,9 @@ def server(tmp_path):
     thread.join(timeout=5)
 
 
-def request(srv, method, path):
+def request(srv, method, path, body=None):
     conn = http.client.HTTPConnection('127.0.0.1', srv.server_address[1], timeout=5)
-    conn.request(method, path)
+    conn.request(method, path, body=body, headers={'Content-Type': 'application/json'})
     return conn.getresponse()
 
 
@@ -129,6 +136,18 @@ def test_http_saglik(server):
     r = request(server, 'GET', '/api/health')
     assert r.status == 200
     assert json.loads(r.read())['ok'] is True
+
+
+def test_http_post_govdesi(server):
+    r = request(server, 'POST', '/api/echo', json.dumps({'görev': 2}).encode('utf-8'))
+    assert r.status == 201
+    assert json.loads(r.read()) == {'görev': 2}
+    r = request(server, 'POST', '/api/echo')  # boş gövde -> {}
+    assert r.status == 201 and json.loads(r.read()) == {}
+    for bad in (b'{bozuk', b'[1, 2]', b'\xff\xfe'):
+        r = request(server, 'POST', '/api/echo', bad)
+        assert r.status == 400, bad
+        assert 'error' in json.loads(r.read())
 
 
 def test_sse_hello_olay_ve_kapanis(server):

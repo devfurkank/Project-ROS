@@ -25,6 +25,23 @@
     </nav>
   </header>
 
+  <section id="liveTop" class="livetop" aria-label="Dünya ve görev">
+    <div id="worlds" class="worlds"></div>
+    <div class="taskrow">
+      <span class="label-inline">Görev</span>
+      <div id="tasks" class="chips"></div>
+      <div class="spacer"></div>
+      <label class="check"><input type="checkbox" id="gz" checked> Gazebo penceresi</label>
+      <label class="check"><input type="checkbox" id="rv"> RViz</label>
+    </div>
+    <div class="cmdrow">
+      <code id="cmd" class="cmd mono" title="Panelin çalıştıracağı komut"></code>
+      <button type="button" id="go" class="btn primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>Başlat</button>
+      <button type="button" id="stop" class="btn"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>Durdur</button>
+    </div>
+    <p id="err" class="err" role="alert"></p>
+  </section>
+
   <main class="grid">
     <section class="card mapcard" aria-labelledby="mapTitle">
       <div class="cardhead">
@@ -33,24 +50,31 @@
       </div>
       <canvas id="map" aria-label="Harita"></canvas>
       <p id="hint" class="hint"></p>
+      <div id="legend" class="legend"></div>
     </section>
 
     <aside class="side">
+      <section class="card" aria-label="Koşu">
+        <div class="runhead"><span id="badge" class="badge neutral">Hazır</span><span id="runScn" class="muted small"></span></div>
+        <p id="runGoal" class="runline">Koşu yok</p>
+        <div id="bars" class="bars"></div>
+        <dl id="runSummary" class="kv summary"></dl>
+        <p id="runMsg" class="muted small"></p>
+      </section>
+      <section class="card">
+        <p class="label">Olaylar</p>
+        <div id="log" class="log mono" aria-live="polite"></div>
+      </section>
       <section class="card">
         <p class="label">Sunucu</p>
         <dl class="kv">
           <dt>Sürüm</dt><dd id="hVersion">–</dd>
-          <dt>Simülasyon</dt><dd id="hSim">–</dd>
           <dt>Bağlı sekme</dt><dd id="hClients">–</dd>
           <dt>Çalışma süresi</dt><dd id="hUptime">–</dd>
           <dt>Son sinyal</dt><dd id="hSeen">–</dd>
         </dl>
         <p class="label spaced">Sonuç klasörü</p>
         <p id="hResults" class="mono path">–</p>
-      </section>
-      <section class="card">
-        <p class="label">Olaylar</p>
-        <div id="log" class="log mono" aria-live="polite"></div>
       </section>
     </aside>
   </main>
