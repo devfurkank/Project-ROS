@@ -55,6 +55,11 @@ def _world(context):
 def generate_launch_description():
     # turtlebot3_gazebo launch dosyaları bu değişken yoksa KeyError verir (T1).
     os.environ.setdefault('TURTLEBOT3_MODEL', 'burger')
+    # Gazebo açılışta ses aygıtı açar (OpenAL). WSLg'nin PulseAudio sunucusu yanıt vermezse ~30 s
+    # bekleyip ALSA'ya düşüyor; o sırada spawn_entity'nin 30 s'si dolar, robot doğmaz ve koşu
+    # açılışta asılı kalır (PT33, 18.10.2026'da iki panel koşusunda). Simülasyonun sese ihtiyacı
+    # yok: OpenAL'in "null" sürücüsü aygıt aramadan hemen açılır.
+    os.environ.setdefault('ALSOFT_DRIVERS', 'null')
 
     gazebo_launch = os.path.join(get_package_share_directory('gazebo_ros'), 'launch')
     tb3_launch = os.path.join(get_package_share_directory('turtlebot3_gazebo'), 'launch')

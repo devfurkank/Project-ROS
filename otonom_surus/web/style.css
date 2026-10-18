@@ -324,3 +324,33 @@ select:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 
 .rmet { margin: 0; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .diff { margin: 0; padding-left: 16px; font-size: 13px; line-height: 1.55; }
 .diff li + li { margin-top: 4px; }
+
+/* Dünya tasarlayıcı (P9): "+" kartı, kendi dünyalarının düğmeleri, tasarım kartı */
+.wcard.add { border-style: dashed; }
+.wcard .addbox {
+  display: flex; align-items: center; justify-content: center; aspect-ratio: 1.4; border-radius: 6px;
+  background: var(--surface-1); color: var(--text-secondary);
+}
+.wcard .addbox .icon { width: 22px; height: 22px; }
+.wcard .wname .pill { vertical-align: 1px; }
+.acts { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.acts:empty { display: none; }
+.btn.danger { color: var(--danger-text); }
+.btn.armed { background: var(--danger-bg); border-color: var(--danger-text); color: var(--danger-text); }
+.field.stack { display: flex; flex-direction: column; align-items: stretch; gap: 4px; margin-top: 10px; }
+input[type="text"] {
+  font: inherit; font-size: 13px; color: var(--text-primary); background: var(--surface-2); min-width: 0;
+  border: 0.5px solid var(--border-strong); border-radius: var(--radius); padding: 5px 8px;
+}
+input[type="text"]:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 1px; }
+.edcount { margin: 8px 0 0; }
+.edgoals { margin: 0; padding: 0; list-style: none; font-size: 13px; font-variant-numeric: tabular-nums; }
+.edgoals li { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-top: 0.5px solid var(--border); }
+.edgoals .ok { color: var(--success-text); }
+.edgoals .bad { color: var(--danger-text); }
+.edgoals .none { color: var(--text-secondary); font-size: 12px; }
+.edissues { margin-top: 8px; font-size: 12px; color: var(--warning-text); }
+.edissues:empty { display: none; }
+.edissues .bad { color: var(--danger-text); }
+.edbtns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+#map.edit { cursor: crosshair; touch-action: none; }

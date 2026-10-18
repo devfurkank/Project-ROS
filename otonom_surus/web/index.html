@@ -30,6 +30,7 @@
     <div class="taskrow">
       <span class="label-inline">Görev</span>
       <div id="tasks" class="chips"></div>
+      <span id="worldActs" class="acts"></span>
       <div class="spacer"></div>
       <label class="check" title="Görevin hedefleri yüklenmez; hedefleri haritaya tıklayarak sen verirsin. Bitir’e basınca sonuçlar kaydedilir."><input type="checkbox" id="free"> Serbest sürüş</label>
       <label class="check"><input type="checkbox" id="gz" checked> Gazebo penceresi</label>
@@ -83,6 +84,18 @@
         <button type="button" id="clearBoxes" class="btn sm" title="Atılan kutuların hepsini kaldır"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 20H8.5l-4.2-4.3a1 1 0 0 1 0-1.4l9.6-9.6a1 1 0 0 1 1.4 0l5 5a1 1 0 0 1 0 1.4L11.5 20"/><path d="M18 13.3L10.7 6"/></svg>Temizle<span id="boxCount" class="muted"></span></button>
         <span id="toolMsg" class="small toolmsg" role="status"></span>
       </div>
+      <div id="edbar" class="playbar" style="display:none">
+        <span class="label-inline">Araç</span>
+        <div class="chips" role="group" aria-label="Tasarım aracı">
+          <button type="button" class="chip" data-etool="box" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1.5"/></svg>Kutu</button>
+          <button type="button" class="chip" data-etool="cylinder" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>Silindir</button>
+          <button type="button" class="chip" data-etool="wall" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16v6H4z"/><path d="M10 9v6M16 9v6"/></svg>Duvar</button>
+          <button type="button" class="chip" data-etool="goal" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/></svg>Hedef</button>
+          <button type="button" class="chip" data-etool="erase" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 20H8.5l-4.2-4.3a1 1 0 0 1 0-1.4l9.6-9.6a1 1 0 0 1 1.4 0l5 5a1 1 0 0 1 0 1.4L11.5 20"/><path d="M18 13.3L10.7 6"/></svg>Sil</button>
+        </div>
+        <button type="button" id="edUndo" class="btn sm" title="Son değişikliği geri al (Ctrl+Z)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>Geri al</button>
+        <span id="edMsg" class="small toolmsg" role="status"></span>
+      </div>
       <div id="confirmBar" class="confirm" style="display:none" role="group" aria-label="Elle hedef onayı">
         <span id="confirmText"></span>
         <button type="button" id="confirmGo" class="btn primary sm">Gönder</button>
@@ -118,6 +131,25 @@
         <div class="runhead"><span class="label flat">Seçili koşular</span><span id="rpCount" class="muted small"></span></div>
         <div id="rpCards" class="rcards"></div>
         <p id="rpEmpty" class="muted small flat">Yukarıdaki listeden en çok 6 koşu seç; numaralar haritadaki robotlarla ve zaman çizelgesiyle eşleşir.</p>
+      </section>
+      <section id="editCard" class="card" aria-label="Tasarım" style="display:none">
+        <div class="runhead"><span class="label flat">Tasarım</span><span id="edState" class="badge neutral">Yeni</span></div>
+        <label class="field stack">Ad <input id="edName" type="text" maxlength="40" placeholder="Kendi parkurum" autocomplete="off"></label>
+        <p id="edCount" class="muted small edcount"></p>
+        <p class="label spaced">Hedefler <span class="muted">· ön kontrol yolu</span></p>
+        <ol id="edGoals" class="edgoals"></ol>
+        <ul id="edIssues" class="diff edissues"></ul>
+        <div class="edbtns">
+          <button type="button" id="edSave" class="btn">Kaydet</button>
+          <button type="button" id="edRun" class="btn primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>Kaydet ve başlat</button>
+        </div>
+        <div class="edbtns">
+          <button type="button" id="edSample" class="btn sm">Örnek parkur</button>
+          <button type="button" id="edClear" class="btn sm" title="Şekilleri ve hedefleri sil (ad ve kayıt kalır)">Temizle</button>
+          <button type="button" id="edNew" class="btn sm" title="Kaydedilmemiş yeni bir dünyaya başla">Yeni dünya</button>
+        </div>
+        <p id="edErr" class="err" role="alert"></p>
+        <p class="muted small flat">Ön kontrol tarayıcıda A* ile, Nav2’nin ayarlarıyla (robot yarıçapı 0.125 m, şişirme 0.35 m): robot haritayı bilmeden yola çıkar, asıl planı Nav2 yapar.</p>
       </section>
       <section id="diffCard" class="card" aria-label="Fark" style="display:none">
         <p class="label">Fark <span class="muted">(veriden)</span></p>

@@ -12,7 +12,7 @@ import os
 import pathlib
 
 from otonom_surus.panel_runs import (
-    GOAL_FIELDS, read_events, read_trajectory, RUN_FIELDS, RunIndex, variant_label)
+    GOAL_FIELDS, meta_scenario, read_events, read_trajectory, RUN_FIELDS, RunIndex, variant_label)
 import pytest
 
 SCENARIOS = """
@@ -269,3 +269,25 @@ def test_gercek_depodaki_30_kosu():
     assert [g['result'] for g in fpd['goals']] == ['SUCCEEDED', 'FAILED', 'SUCCEEDED']
     assert index.get('zor_varyant/s5_r3')['label'] == 'zor varyant'
     assert index.get('s1_r1')['label'] == 'temel'
+
+
+def test_senaryosu_silinen_kosu_meta_kaydindan_adlandirilir(tree):
+    panel = pathlib.Path(tree.panel_dir)
+    name = 's100_p20261018-100000'
+    with open(panel / 'runs.csv', 'a', encoding='utf-8') as f:
+        f.write('2026-10-18T10:00:00,100,p20261018-100000,SUCCEEDED,2,2,60,60,9,8,0.9,0.4,0,\n')
+    write(panel / 'meta' / f'{name}.json', json.dumps({
+        'v': 1, 'scenario': 100, 'scenario_def': {
+            'name': 'Kendi parkurum', 'world': '/x/results/panel/worlds/ozel_100.world',
+            'goals': [[4.2, 4.2, 90.0]], 'moving_obstacles': []}}))
+    _touch_later(panel / 'runs.csv')
+    _touch_later(panel / 'meta')
+    rid = f'panel/{name}'
+    assert (tree.get(rid)['scenario_name'], tree.get(rid)['world']) == (
+        'Kendi parkurum', 'ozel_100.world')
+    # Senaryo panelin dosyasında tanımlıysa ad oradan: yeniden adlandırma koşularda da görünür.
+    write(panel / 'panel_scenarios.yaml',
+          '100:\n  name: Yeni ad\n  world: /x/ozel_100.world\n  goals:\n  - [4.2, 4.2, 90.0]\n')
+    assert tree.get(rid)['scenario_name'] == 'Yeni ad'
+    assert meta_scenario({'scenario_def': {'name': 3}}) == {}
+    assert meta_scenario(None) == {}

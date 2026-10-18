@@ -137,6 +137,21 @@ def read_meta(path):
     return meta if isinstance(meta, dict) else None
 
 
+def meta_scenario(meta):
+    """
+    Meta kaydındaki senaryo tanımından ad ve dünya (dosya adı); yoksa boş sözlük.
+
+    Senaryosu artık tanımlı olmayan koşular için (P9: silinen tasarlanmış dünya): koşu yine
+    adıyla ve dünyasıyla listelenir, tekrar oynatma geometriyi meta'dan çizer.
+    """
+    scenario = meta.get('scenario_def') if isinstance(meta, dict) else None
+    if not isinstance(scenario, dict) or not isinstance(scenario.get('world'), str):
+        return {}
+    name = scenario.get('name')
+    return {'name': name if isinstance(name, str) else None,
+            'world': os.path.basename(scenario['world'])}
+
+
 def _flatten(data, prefix=()):
     """İç içe sözlüğün yaprakları: {anahtar yolu (demet): değer}."""
     if not isinstance(data, dict):
@@ -206,7 +221,7 @@ class RunIndex:
     root: tarama kökü (results/). panel_dir: panelin sonuç klasörü; kökün dışında olsa da taranır,
     koşuları 'panel': True ile işaretlenir. base_params: paketin nav2_params.yaml'ı (varyant
     etiketi için). scenario_files: senaryo dosyaları (paketinki ve P9'da panelinki); senaryonun
-    adı ve dünyası ilk tanımlandığı dosyadan alınır.
+    adı ve dünyası ilk tanımlandığı dosyadan, hiçbirinde yoksa koşunun meta kaydından alınır.
     """
 
     def __init__(self, root, panel_dir=None, base_params=None, scenario_files=()):
@@ -371,11 +386,11 @@ class RunIndex:
             # Aynı koşu kimliği iki kez yazıldıysa hedefleri zaman damgasından ayırt edilir.
             candidates = goals.get((scenario, run_id), [])
             same = [g for g in candidates if g.get('timestamp') == row.get('timestamp')]
-            scenario_def = defs.get(scenario, {})
             meta = {}
             if name + RECORDS['meta'][1] in present['meta']:
                 meta = read_meta(os.path.join(path, RECORDS['meta'][0],
                                               name + RECORDS['meta'][1])) or {}
+            scenario_def = defs.get(scenario) or meta_scenario(meta)
             records[rid] = {  # aynı kimlik ikinci kez geçerse sonraki satır geçerli
                 'id': rid, 'folder': key, 'label': label, 'variant': variant,
                 'panel': path == self.panel_dir,

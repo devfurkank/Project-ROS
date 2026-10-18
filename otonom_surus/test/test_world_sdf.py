@@ -1,12 +1,21 @@
-"""world_sdf'in (.world ayrıştırıcısı) ROS gerektirmeyen birim testleri, paketteki dünyalarla."""
+"""world_sdf'in (.world ayrıştırıcısı ve üreticisi) ROS gerektirmeyen birim testleri."""
 
 import math
 import os
 import xml.etree.ElementTree as ET
 
-from otonom_surus.world_sdf import box_sdf, world_geometry, world_shapes
+from otonom_surus.world_sdf import (
+    box_sdf, design_geometry, design_of, design_world, room_shapes, wall_rect, world_geometry,
+    world_shapes)
+import pytest
 
 WORLDS = os.path.join(os.path.dirname(__file__), '..', 'worlds')
+DESIGN = {
+    'walls': [[-1.0, 1.2, 2.4, 1.2], [0.8, 2.8, 5.0, 2.8], [3.0, -1.0, 3.0, 0.4]],
+    'boxes': [[3.6, 0.3, 0.5, 0.5], [1.6, 1.55, 0.5, 0.8]],
+    'cylinders': [[4.2, 2.0, 0.25]],
+    'goals': [[4.2, 4.2, 90.0], [0.0, 4.3, 180.0]],
+}
 
 
 def by_model(shapes):
@@ -78,6 +87,38 @@ def test_atilan_kutunun_sdfi_statik_ve_boyutu_dogru(tmp_path):
     assert (shape['model'], shape['static'], shape['kind'], shape['size']) == (
         'panel_kutu_3', True, 'box', (0.4, 0.4))
     assert (shape['x'], shape['y']) == (0.0, 0.0)  # konumu spawn_entity'nin initial_pose'u
+
+
+def test_tasarlanan_dunya_gidis_donus(tmp_path):
+    path = tmp_path / 'ozel_100.world'
+    path.write_text(design_world(DESIGN, 'ozel_100'), encoding='utf-8')
+    root = ET.parse(str(path)).getroot()  # geçerli XML
+    assert root.tag == 'sdf' and root.find('world').get('name') == 'ozel_100'
+    models = {m.get('name'): m for m in root.iter('model')}
+    assert all(m.findtext('static') == 'true' for m in models.values())
+    assert not any(m.find('.//include') is not None for m in models.values())  # T7
+    assert {'hedef_1', 'hedef_2'} <= set(models)
+    assert models['hedef_1'].find('.//collision') is None  # hedef diski yalnızca görsel
+    # Ayrıştırıcı üretilen dünyayı tasarımın geometrisi olarak okur; tasarım geri kurulur.
+    geometry = world_geometry(str(path))
+    assert geometry == design_geometry(DESIGN)
+    assert design_of(geometry) == {k: DESIGN[k] for k in ('walls', 'boxes', 'cylinders')}
+    roles = {s['model']: s['role'] for s in geometry['shapes']}
+    assert roles['duvar_3'] == 'wall' and roles['kutu_2'] == roles['silindir_1'] == 'obstacle'
+    assert geometry['bounds'] == [-1.15, -1.15, 5.15, 5.15]
+
+
+def test_tasarim_odasi_paketteki_dunyalarinki():
+    paket = [s for s in world_geometry(os.path.join(WORLDS, 'senaryo2.world'))['shapes']
+             if s['model'] == 'oda']
+    assert design_geometry({})['shapes'] == paket
+    assert len(room_shapes()) == 4
+
+
+def test_duvar_uclarindan_yarim_kalinlik_tasar():
+    # Oda yüzeyinden (x = -1) çizilen duvar odanın duvarına 0.075 m girer: aralık kalmaz.
+    assert wall_rect([-1.0, 1.2, 2.4, 1.2]) == pytest.approx((0.7, 1.2, 3.55, 0.15))
+    assert wall_rect([3.0, -1.0, 3.0, 0.4]) == pytest.approx((3.0, -0.3, 0.15, 1.55))
 
 
 def test_bos_dunyanin_siniri_yok(tmp_path):

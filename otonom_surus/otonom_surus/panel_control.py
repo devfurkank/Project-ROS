@@ -21,7 +21,7 @@ import time
 
 from gazebo_msgs.srv import DeleteEntity, SpawnEntity
 from geometry_msgs.msg import Pose, PoseStamped
-from otonom_surus.world_sdf import box_sdf, half_extent
+from otonom_surus.world_sdf import box_sdf, half_extent, shape_distance
 from std_msgs.msg import String
 
 ROBOT_RADIUS = 0.125  # m; nav2_params.yaml robot_radius: hedef bundan yakına verilmez
@@ -65,17 +65,6 @@ def overlaps(a, b, tol=1e-3):
 def aabb_distance(x, y, a):
     """Noktanın dikdörtgene uzaklığı; içindeyse 0."""
     return math.hypot(max(a[0] - x, 0.0, x - a[2]), max(a[1] - y, 0.0, y - a[3]))
-
-
-def shape_distance(x, y, shape):
-    """Noktanın şekle (dönük kutu ya da silindir) uzaklığı; içindeyse 0."""
-    if shape['kind'] == 'cylinder':
-        return max(0.0, math.hypot(x - shape['x'], y - shape['y']) - shape['size'])
-    c, s = math.cos(shape['yaw']), math.sin(shape['yaw'])
-    dx, dy = x - shape['x'], y - shape['y']
-    u, v = c * dx + s * dy, -s * dx + c * dy  # şeklin kendi ekseninde
-    w, h = shape['size'][:2]
-    return math.hypot(max(abs(u) - w / 2, 0.0), max(abs(v) - h / 2, 0.0))
 
 
 def lane_aabbs(geometry, movers):

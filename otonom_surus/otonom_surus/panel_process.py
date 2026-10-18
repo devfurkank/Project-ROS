@@ -268,7 +268,8 @@ class RunManager:
         with self._lock:
             return list(self.log)
 
-    def start(self, scenario, gui=True, rviz=False, mode='scenario'):
+    def start(self, scenario, gui=True, rviz=False, mode='scenario', scenarios_file=None):
+        """Koşuyu başlatır; scenarios_file verilirse senaryo oradan (P9: tasarlanan dünyalar)."""
         if mode not in LAUNCH_FILES:
             raise RunError(f'Bilinmeyen kip: {mode}')
         with self._lock:
@@ -279,7 +280,7 @@ class RunManager:
             run_id = 'p' + time.strftime('%Y%m%d-%H%M%S')
             cmd = self.command(scenario=scenario, gui=gui, rviz=rviz,
                                results_dir=self.results_dir, run_id=run_id,
-                               scenarios_file=self.scenarios_file, mode=mode)
+                               scenarios_file=scenarios_file or self.scenarios_file, mode=mode)
             self._state = {
                 'phase': 'starting', 'mode': mode, 'scenario': scenario, 'run_id': run_id,
                 'gui': bool(gui), 'rviz': bool(rviz), 'command': ' '.join(cmd),

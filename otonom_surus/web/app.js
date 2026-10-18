@@ -7,6 +7,9 @@
 // tekrar oynatmada olay kaydı (kutular ve elle hedefler kendi anlarında).
 // P7: canlı haritada katmanlar: LiDAR ışınları ve isabetleri, Nav2 global costmap, engel kümeleri;
 // sekme açtığı katmanları sunucuya bildirir, kapalı katmanın verisi gelmez.
+// P9: dünya tasarlayıcı: kutu, silindir, duvar ve hedef yerleştirilir, yol tarayıcıda A* ile ön
+// kontrol edilir; kaydedilen dünya canlı görevde kart olur (düzenle, sil), koşuları tekrar
+// oynatmada kendi kaydındaki geometriyle oynar.
 // Sunucuyla iki yol: /api/stream (SSE, sunucu -> tarayıcı) ve /api/... (JSON istekleri).
 'use strict';
 
@@ -19,8 +22,12 @@ const MODES = {
   replay: {title: 'Tekrar oynatma', empty: 'Koşu seçilmedi',
     hint: 'Yukarıdan bir dünya ve en çok 6 koşu seç; Oynat ile robotlar kaydedilmiş ' +
       'yörüngelerinde birlikte yürür.'},
-  edit: {title: 'Dünya tasarla', empty: 'Tasarlayıcı yakında',
-    hint: 'Dünya tasarlayıcı P9’da gelecek.'},
+  edit: {title: 'Dünya tasarla', empty: 'Tasarım çizilemedi',
+    hint: 'Paketteki dünyalarla aynı 6 × 6 m oda; robot (0, 0)’da +x’e bakarak doğar, çevresindeki ' +
+      '0.5 m (kesikli halka) boş kalır. Şekiller 0.1 m ızgaraya oturur. Mor alan Nav2’nin ' +
+      'şişirmesi (koyu: robot sığmaz); kesikli çizgiler robotun başlangıçtan hedeflere sırayla ' +
+      'gideceği yolun ön kontrolü (A*). Kaydedince dünya canlı görevde kart olarak görünür; ' +
+      'koşuları tekrar oynatmada kendi kayıtlı geometrisiyle oynar.'},
 };
 const LIVE_HINT = 'Canlı: SLAM haritası (/map; sisli alan henüz görülmedi), robot (TF map → ' +
   'base_footprint), izlenen yol ve kesikli Nav2 planı. İnce çizgiler dünyanın gerçek geometrisi; ' +
@@ -92,6 +99,10 @@ const LEGENDS = {
     ['ring', '--map-manual', 'Elle hedef (E1…)'], ['box', '--map-wall', 'Duvar'],
     ['box', '--map-obstacle', 'Engel'], ['dash', '--map-moving', 'Hareketli kutunun şeridi'],
     ['box', '--map-thrown', 'Atılan kutu']],
+  edit: [['dot', '--map-robot', 'Robot (doğduğu yer)'], ['box', '--map-wall', 'Duvar'],
+    ['box', '--map-obstacle', 'Kutu, silindir'], ['ring', '--map-goal', 'Hedef'],
+    ['dash', '--map-path', 'Ön kontrol yolu (A*)'], ['ring', '--map-bad', 'Yol yok'],
+    ['cost', '--map-cost', 'Nav2 şişirmesi (koyu: robot sığmaz)']],
 };
 // Tek koşu görünürken hedefler sonucuyla renklenir.
 LEGENDS.replay1 = LEGENDS.replay.slice(0, 5).concat(
@@ -121,6 +132,7 @@ const state = {
   healthAt: 0,
   source: null,
   worlds: {},  // dosya adı -> geometri
+  custom: {},  // tasarlanan dünyalar: senaryo numarası -> /api/worlds kaydı (design ile)
   scenarios: [],
   scenario: null,  // seçili senaryo numarası
   cards: [],  // dünya kartları: {canvas, geometry, scenario}
@@ -154,6 +166,11 @@ const state = {
   // (0–5; koşu seçimden çıkana kadar sabit); tracks: kimlik -> yörünge ve ondan türetilenler.
   replay: {world: null, sel: {}, colors: {}, hidden: {}, tracks: {}, errors: {}, pending: {},
     t: 0, playing: false, speed: 10, hoverT: null, dragging: false, labelW: 0, legacy: null},
+  // Dünya tasarlayıcı. d: tasarım (id: kayıtlıysa senaryo numarası); saved: kayıtlı halinin imzası
+  // (değişti mi); plan: ön kontrol (şişirilmiş ızgara ve hedeflere yollar); issues: uyarılar;
+  // drag: sürüklenen duvar ya da hedef; undo: önceki tasarımlar; armed: silme onayı bekleyen dünya.
+  ed: {d: emptyDesign(), saved: null, tool: 'box', plan: null, issues: [], costCanvas: null,
+    drag: null, hover: null, undo: [], busy: false, msg: null, armed: null, armTimer: 0},
 };
 
 // Canlı verinin önbelleği; yeni koşu başlarken boşaltılır. scenario: verinin ait olduğu senaryo.
@@ -344,6 +361,7 @@ function connect() {
     redraw();
   });
   on('costmap', setCostmap);
+  on('worlds_changed', () => loadCatalog());  // bir sekmede dünya kaydedildi ya da silindi
   es.onerror = () => {
     setConnection(false);
     // CONNECTING iken tarayıcı kendisi yeniden dener (sunucunun retry süresiyle);
@@ -368,11 +386,20 @@ async function loadCatalog() {
   try {
     const [worlds, scenarios] = await Promise.all([getJson('/api/worlds'), getJson('/api/scenarios')]);
     state.worlds = {};
+    state.custom = {};
     worlds.forEach((w) => {
+      if (w.custom) state.custom[w.scenario] = w;
       if (w.geometry) state.worlds[w.file] = w.geometry;
       else note(`${w.file} okunamadı: ${w.error}`, 'ERROR');
     });
     state.scenarios = scenarios;
+    // Düzenlenen dünya başka bir sekmede silinmişse tasarım kaydedilmemiş yeni dünya olur.
+    const E = state.ed;
+    if (E.d.id !== null && !state.custom[E.d.id]) {
+      E.d.id = null;
+      E.saved = null;
+      saveDraft();
+    }
     const saved = Number(restore('panel.scenario'));
     const ext = externalStatus();
     const running = ACTIVE.has(state.run.phase) ? state.run.scenario : ext ? ext.scenario : null;
@@ -386,6 +413,7 @@ async function loadCatalog() {
     renderMetrics();
     renderRuns();  // senaryo adları ve dünya kartlarının adları artık biliniyor
     renderReplayAll();
+    renderEditor();
     drawMap();
   } catch (e) {
     $('err').textContent = `Dünyalar ya da senaryolar yüklenemedi: ${e.message}`;
@@ -427,7 +455,9 @@ function renderWorlds() {
     card.setAttribute('aria-pressed', String(Boolean(on)));
     const cv = el('canvas');
     card.appendChild(cv);
-    card.appendChild(el('p', 'wname', g.title));
+    const name = el('p', 'wname', g.title);
+    if (base.custom) name.append(' ', el('span', 'pill', 'kendi'));
+    card.appendChild(name);
     const movers = base.moving_obstacles.length;
     const sub = movers ? `${movers} hareketli kutu` : `${base.goals.length} hedef`;
     card.appendChild(el('p', 'wsub', `${g.file} · ${sub}`));
@@ -435,6 +465,15 @@ function renderWorlds() {
     box.appendChild(card);
     state.cards.push({canvas: cv, geometry: state.worlds[g.file], scenario: base});
   });
+  // Kendi dünyanı tasarla: tasarlayıcıyı açar (son tasarım kaldığı yerden).
+  const add = el('button', 'wcard add');
+  add.type = 'button';
+  add.title = 'Dünya tasarla: kendi parkurunu çiz, kaydet ve sür';
+  const plus = el('div', 'addbox');
+  plus.appendChild(icon('plus'));
+  add.append(plus, el('p', 'wname', 'Kendi dünyan'), el('p', 'wsub', 'Dünya tasarla'));
+  add.addEventListener('click', () => setMode('edit'));
+  box.appendChild(add);
   requestAnimationFrame(drawPreviews);
 }
 
@@ -457,6 +496,35 @@ function renderTasks() {
     chip.addEventListener('click', () => selectScenario(s.id));
     box.appendChild(chip);
   });
+  renderWorldActs();
+}
+
+// Seçili dünya tasarlanmışsa: Düzenle (tasarlayıcıda açar) ve Sil (ikinci tıklamayla). Yalnızca
+// durum değişince yeniden kurulur (saniyelik yenilemede odak kaybolmasın).
+function renderWorldActs() {
+  const box = $('worldActs');
+  const s = scenarioById(state.scenario);
+  const E = state.ed;
+  const busy = !state.connected || E.busy ||
+    (ACTIVE.has(state.run.phase) && state.run.scenario === (s && s.id));
+  const sig = s && s.custom ? `${s.id}:${busy}:${E.armed === s.id}` : '';
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  box.textContent = '';
+  if (!sig) return;
+  const edit = el('button', 'btn sm', 'Düzenle');
+  edit.type = 'button';
+  edit.title = 'Bu dünyayı tasarlayıcıda aç; kaydedince üstüne yazılır';
+  edit.disabled = busy;
+  edit.addEventListener('click', () => editWorld(s.id));
+  const armed = E.armed === s.id;
+  const del = el('button', 'btn sm danger' + (armed ? ' armed' : ''), armed ? 'Silinsin mi? Evet' : 'Sil');
+  del.type = 'button';
+  del.title = 'Dünyayı ve senaryosunu sil; koşuları kalır ve tekrar oynatılabilir';
+  del.disabled = busy;
+  del.addEventListener('click', () => (armed ? deleteWorld(s.id) : armDelete(s.id)));
+  box.append(edit, del);
+  if (armed) del.focus();
 }
 
 // remember: false ise seçim tarayıcıda saklanmaz (panel dışı görevin dünyasına geçerken).
@@ -488,9 +556,11 @@ function previewCommand() {
   if (state.scenario === null) return '';
   const dir = state.health ? state.health.results_dir : '<sonuç klasörü>';
   const launch = state.free ? 'free.launch.py' : 'scenario.launch.py';
+  const s = scenarioById(state.scenario);
+  const file = s && s.custom ? ` scenarios_file:=${dir}/panel_scenarios.yaml` : '';
   return `ros2 launch otonom_surus ${launch} scenario:=${state.scenario}` +
     ` gui:=${$('gz').checked} rviz:=${$('rv').checked} results_dir:=${dir} run_id:=p<tarih-saat>` +
-    ' source:=panel';
+    ` source:=panel${file}`;
 }
 
 function renderCommand() {
@@ -518,6 +588,8 @@ function renderControls() {
   $('rv').disabled = active;
   $('free').disabled = active;
   renderTools();
+  renderWorldActs();
+  renderEditButtons();
 }
 
 async function post(url, body, method = 'POST') {
@@ -531,12 +603,15 @@ async function post(url, body, method = 'POST') {
   return data;
 }
 
-async function startRun() {
+// opts.free: serbest sürüş mü (verilmezse seçim kutusundaki); tasarlayıcının "Kaydet ve başlat"ı
+// dünyanın hedefleriyle koşar.
+async function startRun(opts = {}) {
+  const free = opts.free === undefined ? state.free : opts.free;
   $('err').textContent = '';
   state.busy = true;
   renderControls();
   try {
-    const url = state.free ? '/api/free/start' : '/api/run/start';
+    const url = free ? '/api/free/start' : '/api/run/start';
     const run = await post(url, {scenario: state.scenario, gui: $('gz').checked, rviz: $('rv').checked});
     // SSE'deki 'run' olayı yanıttan önce gelmiş olabilir; eski yanıt yeni durumu ezmesin.
     if (run.run_id !== state.run.run_id) applyRun(run);
@@ -1215,6 +1290,852 @@ function drawToolOverlay(T) {
   }
 }
 
+// --- Dünya tasarlayıcı (P9) ----------------------------------------------------------------
+// Tasarım: duvarlar [x0, y0, x1, y1] (eksenlere hizalı; uçlarından yarım kalınlık taşar, böylece
+// oda yüzeyinden çizilen duvar odaya değer), kutular [x, y, en, boy], silindirler [x, y, r],
+// hedefler [x, y, yaw°]. Oda ve şekil adları world_sdf.py'dekiyle aynı (oda, duvar_1, kutu_1,
+// silindir_1); kaydedince sunucu .world'ü ve senaryoyu üretir, denetimleri de aynıdır
+// (panel_worlds.py). Yol ön kontrolü A*: Nav2'nin ayarlarıyla şişirilmiş ızgarada NavFn'in
+// maliyetiyle (50 + 0.8 · maliyet); ulaşılamaz hedef kaydı engellemez, uyarıdır.
+
+const ROOM = [-1, -1, 5, 5];  // odanın iç yüzeyleri (world_sdf.ROOM)
+const WALL_T = 0.15;  // m; duvar kalınlığı
+const ED = {snap: 0.1, box: 0.5, cyl: 0.25, maxGoals: 5, maxShapes: 40, startClear: 0.5,
+  goalClear: 0.2, goalStep: 0.5, minWall: 0.3, pick: 0.15, undo: 50, eps: 1e-6};
+// nav2_params.yaml: robot_radius, inflation_radius, cost_scaling_factor; ızgara costmap'inki
+// (0.05 m). Hücre merkezinin engele uzaklığı radius + res/2'den azsa robot sığmaz (Nav2'de 253,
+// NavFn'de engel). narrow: T9 (0.7 m'den dar geçit); door: T20 (oda duvarına bitişik geçit).
+const PLAN = {res: 0.05, radius: 0.125, inflation: 0.35, scaling: 3.0, narrow: 0.7, door: 1.0};
+const ED_TOOLS = {
+  box: 'Tıkla: 0.5 m kutu.',
+  cylinder: 'Tıkla: 0.25 m yarıçaplı silindir.',
+  wall: 'Tıkla ve sürükle: duvar (yatay ya da dikey).',
+  goal: 'Tıkla: hedef (en çok 5); yön için tıklayıp sürükle.',
+  erase: 'Tıkla: şekli ya da hedefi sil.',
+};
+// İki hedefli zikzak parkur (senaryo 2'ye benzer): kapılar odanın zıt uçlarında, kapılar geniş
+// (T20 uyarısı yok), her koridorda bir engel.
+const SAMPLE_DESIGN = {name: 'Örnek parkur',
+  walls: [[-1, 1.2, 2.4, 1.2], [0.8, 2.8, 5, 2.8]],
+  boxes: [[3.6, 0.3, 0.5, 0.5], [1.6, 1.55, 0.5, 0.5], [3, 3.8, 0.5, 0.5]],
+  cylinders: [[4.2, 2, 0.25], [1.6, 4.4, 0.25]],
+  goals: [[4.2, 4.2, 90], [0, 4.3, 180]]};
+const CUSTOM_WORLD = /^ozel_\d+\.world$/;
+
+function emptyDesign() {
+  return {id: null, name: '', walls: [], boxes: [], cylinders: [], goals: []};
+}
+
+// Tarayıcıda saklanan ya da geri alınan tasarımı doğrular (bozuk öğeler atlanır).
+function cleanDesign(o) {
+  const d = emptyDesign();
+  if (!o || typeof o !== 'object') return d;
+  const items = (a, n) => (Array.isArray(a) ? a : []).filter((it) => Array.isArray(it) &&
+    it.length === n && it.every((v) => typeof v === 'number' && Number.isFinite(v))).map((it) => it.slice());
+  d.id = Number.isInteger(o.id) ? o.id : null;
+  d.name = typeof o.name === 'string' ? o.name.slice(0, 40) : '';
+  d.walls = items(o.walls, 4);
+  d.boxes = items(o.boxes, 4);
+  d.cylinders = items(o.cylinders, 3);
+  d.goals = items(o.goals, 3).slice(0, ED.maxGoals);
+  return d;
+}
+
+function designSig(d) {
+  return JSON.stringify([d.id, d.name.trim(), d.walls, d.boxes, d.cylinders, d.goals]);
+}
+
+function saveDraft() {
+  store('panel.design.v1', JSON.stringify({d: state.ed.d, saved: state.ed.saved}));
+}
+
+function restoreDraft() {
+  try {
+    const o = JSON.parse(restore('panel.design.v1') || 'null');
+    if (o && typeof o === 'object') {
+      state.ed.d = cleanDesign(o.d);
+      state.ed.saved = typeof o.saved === 'string' ? o.saved : null;
+    }
+  } catch (e) {
+    // Bozuk kayıt: boş tasarımla başlanır.
+  }
+  const tool = restore('panel.etool');
+  if (ED_TOOLS[tool]) state.ed.tool = tool;
+}
+
+// --- Geometri: world_sdf.py'deki room_shapes, design_shapes ve shape_distance'ın eşi ---
+
+function wallRect([x0, y0, x1, y1]) {
+  const cx = (x0 + x1) / 2;
+  const cy = (y0 + y1) / 2;
+  return Math.abs(x1 - x0) >= Math.abs(y1 - y0) ? [cx, cy, Math.abs(x1 - x0) + WALL_T, WALL_T]
+    : [cx, cy, WALL_T, Math.abs(y1 - y0) + WALL_T];
+}
+
+function boxShape(model, role, x, y, w, h) {
+  return {model, role, kind: 'box', x, y, yaw: 0, size: [w, h]};
+}
+
+function cylShape(model, x, y, r) {
+  return {model, role: 'obstacle', kind: 'cylinder', x, y, yaw: 0, size: r};
+}
+
+function roomShapes() {
+  const [x0, y0, x1, y1] = ROOM;
+  const cx = (x0 + x1) / 2;
+  const cy = (y0 + y1) / 2;
+  const t = WALL_T;
+  return [boxShape('oda', 'wall', cx, y0 - t / 2, x1 - x0 + 2 * t, t),
+    boxShape('oda', 'wall', cx, y1 + t / 2, x1 - x0 + 2 * t, t),
+    boxShape('oda', 'wall', x0 - t / 2, cy, t, y1 - y0),
+    boxShape('oda', 'wall', x1 + t / 2, cy, t, y1 - y0)];
+}
+
+function designShapes(d) {
+  return [
+    ...d.walls.map((w, i) => boxShape(`duvar_${i + 1}`, 'wall', ...wallRect(w))),
+    ...d.boxes.map(([x, y, w, h], i) => boxShape(`kutu_${i + 1}`, 'obstacle', x, y, w, h)),
+    ...d.cylinders.map(([x, y, r], i) => cylShape(`silindir_${i + 1}`, x, y, r)),
+  ];
+}
+
+function designGeometry(d) {
+  const t = WALL_T;
+  return {shapes: roomShapes().concat(designShapes(d)),
+    bounds: [ROOM[0] - t, ROOM[1] - t, ROOM[2] + t, ROOM[3] + t]};
+}
+
+// Noktanın şekle (dönük kutu ya da silindir) uzaklığı; içindeyse 0.
+function shapeDistance(x, y, sh) {
+  if (sh.kind === 'cylinder') return Math.max(0, Math.hypot(x - sh.x, y - sh.y) - sh.size);
+  const c = Math.cos(sh.yaw);
+  const s = Math.sin(sh.yaw);
+  const dx = x - sh.x;
+  const dy = y - sh.y;
+  const u = c * dx + s * dy;
+  const v = -s * dx + c * dy;
+  return Math.hypot(Math.max(Math.abs(u) - sh.size[0] / 2, 0), Math.max(Math.abs(v) - sh.size[1] / 2, 0));
+}
+
+function edSnap(v) {
+  return Math.round(Math.round(v / ED.snap) * ED.snap * 100) / 100;
+}
+
+function edClamp(p) {
+  return [Math.min(ROOM[2], Math.max(ROOM[0], p[0])), Math.min(ROOM[3], Math.max(ROOM[1], p[1]))];
+}
+
+function edInside(x0, y0, x1, y1, margin = 0) {
+  return x0 >= ROOM[0] + margin - ED.eps && x1 <= ROOM[2] - margin + ED.eps &&
+    y0 >= ROOM[1] + margin - ED.eps && y1 <= ROOM[3] - margin + ED.eps;
+}
+
+// --- Denetimler (panel_worlds.py'dekilerle aynı) ---
+
+// Yeni şeklin denetimi; sorun varsa ileti.
+function edCheckShape(d, sh) {
+  if (d.walls.length + d.boxes.length + d.cylinders.length >= ED.maxShapes) {
+    return `En çok ${ED.maxShapes} şekil konabilir.`;
+  }
+  const [hx, hy] = sh.kind === 'cylinder' ? [sh.size, sh.size] : [sh.size[0] / 2, sh.size[1] / 2];
+  if (sh.role !== 'wall' && !edInside(sh.x - hx, sh.y - hy, sh.x + hx, sh.y + hy)) {
+    return 'Odanın dışına taşıyor.';
+  }
+  if (shapeDistance(0, 0, sh) < ED.startClear - ED.eps) {
+    return `Robotun doğduğu (0, 0) noktasının ${ED.startClear} m çevresi boş kalmalı.`;
+  }
+  const k = d.goals.findIndex(([x, y]) => shapeDistance(x, y, sh) < ED.goalClear - ED.eps);
+  if (k >= 0) return `Hedef ${k + 1} ile çakışıyor; önce hedefi taşı ya da sil.`;
+  return null;
+}
+
+// k. hedefin (0'dan) (x, y)'deki denetimi; sorun varsa "Hedef"ten sonra gelecek ileti.
+function edGoalProblem(d, x, y, k) {
+  if (!edInside(x, y, x, y, ED.goalClear)) return 'odanın duvarına çok yakın.';
+  const near = designGeometry(d).shapes.find((sh) => shapeDistance(x, y, sh) < ED.goalClear - ED.eps);
+  if (near) return `${near.role === 'wall' ? 'bir duvara' : 'bir engele'} çok yakın; robot oraya sığmaz.`;
+  const prev = k ? d.goals[k - 1] : [0, 0];
+  if (Math.hypot(x - prev[0], y - prev[1]) < ED.goalStep - ED.eps) {
+    return `${k ? 'bir öncekine' : 'robotun başlangıcına'} çok yakın (en az ${ED.goalStep} m).`;
+  }
+  return null;
+}
+
+// Kaydı engelleyen sorunlar (sunucu da reddeder).
+function edErrors(d) {
+  if (!d.goals.length) return ['En az bir hedef koy.'];
+  const errors = [];
+  d.goals.forEach(([x, y], k) => {
+    const p = edGoalProblem(d, x, y, k);
+    if (p) errors.push(`Hedef ${k + 1} ${p}`);
+  });
+  return errors;
+}
+
+// --- Yol ön kontrolü (A*) ---
+
+function cellOf(P, x, y) {
+  const i = Math.min(P.nx - 1, Math.max(0, Math.floor((x - ROOM[0]) / P.res)));
+  const j = Math.min(P.ny - 1, Math.max(0, Math.floor((y - ROOM[1]) / P.res)));
+  return j * P.nx + i;
+}
+
+function cellCenter(P, n) {
+  const i = n % P.nx;
+  return [ROOM[0] + (i + 0.5) * P.res, ROOM[1] + ((n - i) / P.nx + 0.5) * P.res];
+}
+
+// En küçük öncelikli kuyruk (ikili yığın): [öncelik, hücre].
+function heapPush(h, f, n) {
+  h.push([f, n]);
+  let i = h.length - 1;
+  while (i > 0) {
+    const p = (i - 1) >> 1;
+    if (h[p][0] <= h[i][0]) break;
+    [h[p], h[i]] = [h[i], h[p]];
+    i = p;
+  }
+}
+
+function heapPop(h) {
+  const top = h[0];
+  const last = h.pop();
+  if (h.length) {
+    h[0] = last;
+    let i = 0;
+    for (;;) {
+      const a = 2 * i + 1;
+      const b = a + 1;
+      let m = i;
+      if (a < h.length && h[a][0] < h[m][0]) m = a;
+      if (b < h.length && h[b][0] < h[m][0]) m = b;
+      if (m === i) break;
+      [h[m], h[i]] = [h[i], h[m]];
+      i = m;
+    }
+  }
+  return top[1];
+}
+
+// Doğru boyunca her yerde engele uzaklık en az min mi (yarım hücre adımlarla).
+function clearLine(P, a, b, min) {
+  const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / (P.res / 2)));
+  for (let i = 1; i < n; i++) {
+    const x = a[0] + (b[0] - a[0]) * i / n;
+    const y = a[1] + (b[1] - a[1]) * i / n;
+    if (P.dist[cellOf(P, x, y)] < min) return false;
+  }
+  return true;
+}
+
+// Izgara yolunu kısaltır (gösterim ve yol uzunluğu için): düz gidiş, ızgara yolunun o kesimde
+// engellere yaklaştığından daha çok yaklaşmıyorsa ara noktalar atlanır.
+function shortcut(P, pts, cells) {
+  if (pts.length <= 2) return pts;
+  const out = [pts[0]];
+  let anchor = 0;
+  let floor = P.dist[cells[0]];
+  for (let k = 1; k < pts.length; k++) {
+    floor = Math.min(floor, P.dist[cells[k]]);
+    if (!clearLine(P, pts[anchor], pts[k], Math.min(floor, PLAN.inflation) - ED.eps)) {
+      out.push(pts[k - 1]);
+      anchor = k - 1;
+      floor = Math.min(P.dist[cells[k - 1]], P.dist[cells[k]]);
+    }
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
+// a'dan b'ye A* (8 komşu, köşe kesilmez; adım maliyeti uzunluk · (1 + 0.016 · maliyet), NavFn'in
+// 50 + 0.8 · maliyet'i). Yol yoksa null; varsa {pts, len, clear}: clear yolun (uçlarının 0.3 m'si
+// hariç) engellere en çok yaklaştığı uzaklık.
+function planLeg(P, a, b) {
+  const {nx, ny, cost, dist} = P;
+  const s = cellOf(P, a[0], a[1]);
+  const g = cellOf(P, b[0], b[1]);
+  if (cost[s] === 255 || cost[g] === 255) return null;
+  const G = new Float64Array(nx * ny).fill(Infinity);
+  const from = new Int32Array(nx * ny).fill(-1);
+  const done = new Uint8Array(nx * ny);
+  const gx = g % nx;
+  const gy = (g - gx) / nx;
+  const heap = [];
+  G[s] = 0;
+  heapPush(heap, 0, s);
+  while (heap.length) {
+    const n = heapPop(heap);
+    if (done[n]) continue;
+    if (n === g) break;
+    done[n] = 1;
+    const x = n % nx;
+    const y = (n - x) / nx;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const X = x + dx;
+        const Y = y + dy;
+        if ((!dx && !dy) || X < 0 || Y < 0 || X >= nx || Y >= ny) continue;
+        const m = Y * nx + X;
+        if (done[m] || cost[m] === 255) continue;
+        if (dx && dy && (cost[y * nx + X] === 255 || cost[Y * nx + x] === 255)) continue;
+        const v = G[n] + (dx && dy ? Math.SQRT2 : 1) * (1 + 0.016 * cost[m]);
+        if (v < G[m]) {
+          G[m] = v;
+          from[m] = n;
+          heapPush(heap, v + Math.hypot(X - gx, Y - gy), m);
+        }
+      }
+    }
+  }
+  if (s !== g && from[g] < 0) return null;
+  const cells = [];
+  for (let n = g; n !== -1; n = from[n]) cells.push(n);
+  cells.reverse();
+  const pts = cells.map((n) => cellCenter(P, n));
+  pts[0] = [a[0], a[1]];
+  if (cells.length === 1) {
+    pts.push([b[0], b[1]]);
+    cells.push(g);
+  } else pts[pts.length - 1] = [b[0], b[1]];
+  let clear = Infinity;
+  cells.forEach((n) => {
+    const [x, y] = cellCenter(P, n);
+    if (Math.hypot(x - a[0], y - a[1]) > 0.3 && Math.hypot(x - b[0], y - b[1]) > 0.3) {
+      clear = Math.min(clear, dist[n]);
+    }
+  });
+  const path = shortcut(P, pts, cells);
+  let len = 0;
+  for (let k = 1; k < path.length; k++) {
+    len += Math.hypot(path[k][0] - path[k - 1][0], path[k][1] - path[k - 1][1]);
+  }
+  return {pts: path, len, clear};
+}
+
+// Şişirilmiş ızgara (oda içi, 0.05 m): hücre merkezinin en yakın şekle uzaklığı ve Nav2 maliyeti
+// (0–252; 255: robot sığmaz), sonra başlangıçtan hedeflere sırayla yollar.
+function edEvaluate() {
+  const E = state.ed;
+  const d = E.d;
+  const shapes = designGeometry(d).shapes;
+  const res = PLAN.res;
+  const nx = Math.round((ROOM[2] - ROOM[0]) / res);
+  const ny = Math.round((ROOM[3] - ROOM[1]) / res);
+  const dist = new Float32Array(nx * ny);
+  const cost = new Uint8Array(nx * ny);
+  const block = PLAN.radius + res / 2;
+  for (let j = 0; j < ny; j++) {
+    const cy = ROOM[1] + (j + 0.5) * res;
+    for (let i = 0; i < nx; i++) {
+      const cx = ROOM[0] + (i + 0.5) * res;
+      let m = Infinity;
+      for (const sh of shapes) m = Math.min(m, shapeDistance(cx, cy, sh));
+      const k = j * nx + i;
+      dist[k] = m;
+      cost[k] = m < block ? 255 : m >= PLAN.inflation ? 0
+        : Math.round(252 * Math.exp(-PLAN.scaling * (m - PLAN.radius)));
+    }
+  }
+  const P = {nx, ny, res, dist, cost};
+  let from = [0, 0];
+  P.legs = d.goals.map((g) => {
+    const leg = planLeg(P, from, g);
+    from = g;
+    return leg;
+  });
+  E.plan = P;
+  E.costCanvas = null;
+  E.issues = edIssues(d, P);
+}
+
+// Uyarılar: kaydı engelleyenler (bad), yol yok (bad), dar geçit (T9), oda duvarına bitişik geçit
+// (T20: robot oda duvarını sığ açıyla tararsa SLAM haritasında duvar delinir).
+function edIssues(d, P) {
+  const out = [];
+  if (d.goals.length) edErrors(d).forEach((text) => out.push({text, bad: true}));
+  P.legs.forEach((leg, k) => {
+    if (!leg) {
+      out.push({text: `Hedef ${k + 1}: yol yok (ön kontrol). Bir geçit aç ya da hedefi taşı.`, bad: true});
+    } else if (leg.clear < PLAN.narrow / 2 - 0.005) {
+      // Açık alanda yol şişirmenin kenarından (0.35 m) geçer; daha yakını geçidin dar olduğunu
+      // gösterir (maliyeti yüksek hücrelerden ancak zorunlu kalınca geçilir).
+      out.push({text: `Hedef ${k + 1} yolunda dar geçit (≈ ${(2 * leg.clear).toFixed(2)} m < ` +
+        `${PLAN.narrow} m, T9): Nav2 zorlanabilir.`});
+    }
+  });
+  d.walls.forEach((w, i) => {
+    const [cx, cy, sw, sh] = wallRect(w);
+    const gaps = sw >= sh ? [cx - sw / 2 - ROOM[0], ROOM[2] - cx - sw / 2]
+      : [cy - sh / 2 - ROOM[1], ROOM[3] - cy - sh / 2];
+    gaps.filter((g) => g > 0.05 && g < PLAN.door).forEach((g) => {
+      out.push({text: `Duvar ${i + 1} ile oda duvarı arasında ${g.toFixed(2)} m’lik geçit: robot oda ` +
+        'duvarına yakın geçerse SLAM haritası delinebilir (T20). Duvarı odaya değdir ya da geçidi ' +
+        `${PLAN.door} m’den geniş bırak; kapı gerekiyorsa oda duvarından ≥ 0.6 m içeride olsun.`});
+    });
+  });
+  return out;
+}
+
+// --- Değişiklik, geri alma, kayıt ---
+
+function edUpdated() {
+  edEvaluate();
+  saveDraft();
+  $('edErr').textContent = '';
+  renderEditor();
+  redraw();
+}
+
+function edChange(mutate) {
+  const E = state.ed;
+  E.undo.push(JSON.stringify(E.d));
+  if (E.undo.length > ED.undo) E.undo.shift();
+  mutate(E.d);
+  edUpdated();
+}
+
+// Başka bir tasarım yükler (örnek, yeni, kayıtlı dünya); öncekine Geri al ile dönülür.
+function edLoad(d, saved) {
+  const E = state.ed;
+  E.undo.push(JSON.stringify(E.d));
+  if (E.undo.length > ED.undo) E.undo.shift();
+  E.d = d;
+  E.saved = saved ? designSig(d) : null;
+  E.drag = null;
+  edUpdated();
+}
+
+function edUndo() {
+  const E = state.ed;
+  if (!E.undo.length || E.busy) return;
+  E.d = cleanDesign(JSON.parse(E.undo.pop()));
+  E.drag = null;
+  edUpdated();
+}
+
+function edSample() {
+  const d = cleanDesign(SAMPLE_DESIGN);
+  d.id = state.ed.d.id;  // düzenlenen dünyanın üstüne kaydedilir
+  d.name = state.ed.d.name || SAMPLE_DESIGN.name;
+  edLoad(d, false);
+  edNote('Örnek parkur yüklendi: iki hedefli zikzak.', false);
+}
+
+function edClear() {
+  edChange((d) => {
+    d.walls = [];
+    d.boxes = [];
+    d.cylinders = [];
+    d.goals = [];
+  });
+}
+
+function edNew() {
+  edLoad(emptyDesign(), false);
+  edNote('Yeni dünya: kaydedince yeni bir kart olur.', false);
+}
+
+function edSetTool(tool) {
+  state.ed.tool = tool;
+  state.ed.drag = null;
+  state.ed.msg = null;
+  store('panel.etool', tool);
+  renderEditor();
+  redraw();
+}
+
+// Araç çubuğundaki geçici ileti; 6 s sonra aracın ipucuna döner.
+function edNote(text, bad) {
+  state.ed.msg = {text, bad: Boolean(bad), until: Date.now() + 6000};
+  renderEditor();
+  setTimeout(renderEditor, 6100);
+}
+
+// Canlı görevdeki "Düzenle": kayıtlı dünya tasarlayıcıda açılır.
+function editWorld(id) {
+  const w = state.custom[id];
+  if (!w || !w.design) {
+    note(`S${id}: dünyanın tasarımı okunamadı`, 'ERROR');
+    return;
+  }
+  edLoad(cleanDesign({...w.design, id}), true);
+  setMode('edit');
+  edNote(`S${id} düzenleniyor; kaydedince üstüne yazılır.`, false);
+}
+
+function armDelete(id) {
+  const E = state.ed;
+  E.armed = id;
+  clearTimeout(E.armTimer);
+  E.armTimer = setTimeout(() => {
+    E.armed = null;
+    renderWorldActs();
+  }, 4000);
+  renderWorldActs();
+}
+
+async function deleteWorld(id) {
+  const E = state.ed;
+  E.armed = null;
+  E.busy = true;
+  renderWorldActs();
+  try {
+    await post('/api/worlds', {id}, 'DELETE');
+    note(`Dünya silindi: S${id} (koşuları tekrar oynatmada kalır)`);
+    if (E.d.id === id) {
+      E.d.id = null;
+      E.saved = null;
+      saveDraft();
+    }
+    await loadCatalog();
+  } catch (e) {
+    $('err').textContent = e.message;
+  } finally {
+    E.busy = false;
+    renderWorldActs();
+    renderEditor();
+  }
+}
+
+// Kaydet; start: sonra canlı göreve geçip dünyanın hedefleriyle koşuyu başlat.
+async function saveDesign(start) {
+  const E = state.ed;
+  const errors = edErrors(E.d);
+  if (errors.length) {
+    $('edErr').textContent = errors[0];
+    return;
+  }
+  if (E.d.id !== null && !state.custom[E.d.id]) E.d.id = null;  // silinmiş: yeni olarak kaydedilir
+  const update = E.d.id !== null;
+  E.busy = true;
+  $('edErr').textContent = '';
+  renderEditor();
+  try {
+    const d = E.d;
+    const r = await post('/api/worlds', {id: d.id, name: d.name.trim(), walls: d.walls,
+      boxes: d.boxes, cylinders: d.cylinders, goals: d.goals});
+    d.id = r.id;
+    d.name = r.name;
+    E.saved = designSig(d);
+    saveDraft();
+    note(`Dünya ${update ? 'güncellendi' : 'kaydedildi'}: ${r.name} (S${r.id}, ${r.file})`);
+    await loadCatalog();
+    if (!start) {
+      edNote(`Kaydedildi: S${r.id}. Canlı görevde kartını seçip başlatabilirsin.`, false);
+    } else if (ACTIVE.has(state.run.phase)) {
+      $('edErr').textContent = 'Kaydedildi; ama bir koşu sürüyor. Başlatmak için önce onu durdur.';
+    } else {
+      setMode('live');
+      selectScenario(r.id);
+      startRun({free: false});
+    }
+  } catch (e) {
+    $('edErr').textContent = e.message;
+  } finally {
+    E.busy = false;
+    renderEditor();
+    renderWorldActs();
+  }
+}
+
+// --- Tasarım kartı ve araç çubuğu ---
+
+function renderEditButtons() {
+  const E = state.ed;
+  const errors = edErrors(E.d);
+  const dirty = E.saved !== designSig(E.d);
+  const blocked = !state.connected || E.busy || errors.length > 0;
+  const why = !state.connected ? 'Sunucuya bağlı değil' : E.busy ? 'Kaydediliyor…' : errors[0] || '';
+  $('edSave').disabled = blocked || !dirty;
+  $('edSave').title = why || (!dirty ? 'Kayıtlı haliyle aynı' : '');
+  $('edRun').disabled = blocked || ACTIVE.has(state.run.phase);
+  $('edRun').title = why || (ACTIVE.has(state.run.phase) ? 'Bir koşu sürüyor' : 'Kaydet, canlı göreve geç ve başlat');
+  $('edUndo').disabled = !E.undo.length || E.busy;
+  ['edSample', 'edClear', 'edNew'].forEach((id) => {
+    $(id).disabled = E.busy;
+  });
+}
+
+function renderEditor() {
+  const E = state.ed;
+  const d = E.d;
+  document.querySelectorAll('#edbar [data-etool]').forEach((b) => {
+    const on = b.dataset.etool === E.tool;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  if (document.activeElement !== $('edName')) $('edName').value = d.name;
+  const dirty = E.saved !== designSig(d);
+  const empty = !d.walls.length && !d.boxes.length && !d.cylinders.length && !d.goals.length;
+  const [text, tone] = d.id === null ? [empty ? 'Yeni' : 'Kaydedilmedi', empty ? 'neutral' : 'warn']
+    : dirty ? [`S${d.id} · değişti`, 'warn'] : [`S${d.id} · kayıtlı`, 'ok'];
+  setText($('edState'), text);
+  $('edState').className = `badge ${tone}`;
+  setText($('edCount'), `${d.walls.length} duvar · ${d.boxes.length} kutu · ` +
+    `${d.cylinders.length} silindir · ${d.goals.length}/${ED.maxGoals} hedef`);
+  const list = $('edGoals');
+  list.textContent = '';
+  const legs = E.plan ? E.plan.legs : [];
+  d.goals.forEach((g, k) => {
+    const li = el('li');
+    li.appendChild(el('span', '', `Hedef ${k + 1} (${g[0].toFixed(1)}, ${g[1].toFixed(1)}) · ${Math.round(g[2])}°`));
+    const leg = legs[k];
+    li.appendChild(leg ? el('span', 'ok', `≈ ${leg.len.toFixed(1)} m`) : el('span', 'bad', 'yol yok'));
+    list.appendChild(li);
+  });
+  if (!d.goals.length) list.appendChild(el('li', 'none', 'Henüz hedef yok: Hedef aracıyla haritaya tıkla.'));
+  const issues = $('edIssues');
+  issues.textContent = '';
+  E.issues.forEach((it) => issues.appendChild(el('li', it.bad ? 'bad' : '', it.text)));
+  renderEditButtons();
+  const m = E.msg;
+  let msg = ED_TOOLS[E.tool];
+  let bad = false;
+  if (m && Date.now() < m.until) ({text: msg, bad} = m);
+  else if (E.busy) msg = 'Kaydediliyor…';
+  const box = $('edMsg');
+  setText(box, msg);
+  box.title = msg;
+  box.classList.toggle('bad', bad);
+}
+
+// --- Fare ---
+
+function edPoint(e) {
+  const p = toWorld(e);
+  return p ? {raw: p, q: [edSnap(p[0]), edSnap(p[1])]} : null;
+}
+
+// Sürüklenen duvar: başlangıçtan uzun eksen boyunca; kısaysa null.
+function dragWall(g) {
+  const [ax, ay] = g.a;
+  const [bx, by] = g.b;
+  const w = Math.abs(bx - ax) >= Math.abs(by - ay) ? [Math.min(ax, bx), ay, Math.max(ax, bx), ay]
+    : [ax, Math.min(ay, by), ax, Math.max(ay, by)];
+  return Math.hypot(w[2] - w[0], w[3] - w[1]) < ED.minWall - ED.eps ? null : w.map((v) => Math.round(v * 100) / 100);
+}
+
+// Hedefin yönü (derece): yeterince sürüklendiyse sürükleme yönü, değilse bir önceki noktadan geliş.
+function goalYaw(d, a, b) {
+  const prev = d.goals.length ? d.goals[d.goals.length - 1] : [0, 0];
+  const [ux, uy] = Math.hypot(b[0] - a[0], b[1] - a[1]) >= DRAG_MIN ? [b[0] - a[0], b[1] - a[1]]
+    : [a[0] - prev[0], a[1] - prev[1]];
+  const yaw = Math.round(Math.atan2(uy, ux) * 180 / Math.PI);
+  return yaw === -180 ? 180 : yaw;
+}
+
+// Silinecek öğe: fare noktasına en yakın hedef ya da şekil (ED.pick içinde).
+function edHit(d, p) {
+  let best = null;
+  const consider = (list, index, dist) => {
+    if (dist <= ED.pick && (!best || dist < best.dist)) best = {list, index, dist};
+  };
+  d.goals.forEach(([x, y], i) => consider('goals', i, Math.max(0, Math.hypot(p[0] - x, p[1] - y) - 0.25)));
+  designShapes(d).forEach((sh) => {
+    const [kind, n] = sh.model.split('_');
+    const list = {duvar: 'walls', kutu: 'boxes', silindir: 'cylinders'}[kind];
+    consider(list, Number(n) - 1, shapeDistance(p[0], p[1], sh));
+  });
+  return best;
+}
+
+function edDown(e) {
+  const E = state.ed;
+  if (e.button !== 0 || E.busy) return;
+  const pt = edPoint(e);
+  if (!pt) return;
+  e.preventDefault();
+  const [x, y] = pt.q;
+  const d = E.d;
+  if (E.tool === 'wall') {
+    const a = edClamp(pt.q);
+    E.drag = {kind: 'wall', a, b: a};
+    $('map').setPointerCapture(e.pointerId);
+  } else if (E.tool === 'goal') {
+    const full = d.goals.length >= ED.maxGoals;
+    const problem = full ? `En çok ${ED.maxGoals} hedef konabilir.` : edGoalProblem(d, x, y, d.goals.length);
+    if (problem) edNote(full ? problem : `Hedef ${problem}`, true);
+    else {
+      E.drag = {kind: 'goal', a: [x, y], b: pt.raw};
+      $('map').setPointerCapture(e.pointerId);
+    }
+  } else if (E.tool === 'erase') {
+    const hit = edHit(d, pt.raw);
+    if (hit) edChange((dd) => dd[hit.list].splice(hit.index, 1));
+    else edNote('Burada silinecek bir şey yok.', false);
+  } else {
+    const box = E.tool === 'box';
+    const sh = box ? boxShape('kutu', 'obstacle', x, y, ED.box, ED.box) : cylShape('silindir', x, y, ED.cyl);
+    const problem = edCheckShape(d, sh);
+    if (problem) edNote(problem, true);
+    else edChange((dd) => (box ? dd.boxes.push([x, y, ED.box, ED.box]) : dd.cylinders.push([x, y, ED.cyl])));
+  }
+  redraw();
+}
+
+function edMove(e) {
+  const E = state.ed;
+  const pt = edPoint(e);
+  E.hover = pt;
+  if (E.drag && pt) E.drag.b = E.drag.kind === 'wall' ? edClamp(pt.q) : pt.raw;
+  redraw();
+}
+
+function edUp() {
+  const E = state.ed;
+  const g = E.drag;
+  if (!g) return;
+  E.drag = null;
+  if (g.kind === 'goal') {
+    const yaw = goalYaw(E.d, g.a, g.b);
+    edChange((d) => d.goals.push([g.a[0], g.a[1], yaw]));
+    return;
+  }
+  const w = dragWall(g);
+  const problem = w ? edCheckShape(E.d, boxShape('duvar', 'wall', ...wallRect(w))) : null;
+  if (!w) edNote(`Duvar en az ${ED.minWall} m olmalı: tıkla ve sürükle.`, false);
+  else if (problem) edNote(problem, true);
+  else edChange((d) => d.walls.push(w));
+  redraw();
+}
+
+// --- Çizim ---
+
+// Şişirme katmanı: ızgaranın maliyeti tek tonla (koyu: robot sığmaz); şekillerin içi boş bırakılır.
+function edCostCanvas(P) {
+  const cv = document.createElement('canvas');
+  cv.width = P.nx;
+  cv.height = P.ny;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(P.nx, P.ny);
+  const [r, g, b] = colorRgb(cssVar('--map-cost'));
+  for (let j = 0; j < P.ny; j++) {
+    for (let i = 0; i < P.nx; i++) {
+      const n = j * P.nx + i;
+      const c = P.cost[n];
+      if (!c || P.dist[n] === 0) continue;
+      const k = ((P.ny - 1 - j) * P.nx + i) * 4;  // satırlar ters: kuzey yukarı
+      img.data[k] = r;
+      img.data[k + 1] = g;
+      img.data[k + 2] = b;
+      img.data[k + 3] = c === 255 ? 150 : Math.round(25 + 75 * c / 252);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return cv;
+}
+
+// Fare altındaki önizleme: sürüklenen duvar ya da hedef; yerleştirilecek şekil (konamıyorsa
+// kırmızı çerçeve); silinecek öğenin çerçevesi.
+function drawEditOverlay(T) {
+  const E = state.ed;
+  const d = E.d;
+  const x = T.x;
+  const bad = cssVar('--map-bad');
+  const ghost = (sh, color, problem) => {
+    x.save();
+    shapePath(T, sh);
+    x.globalAlpha = 0.5;
+    x.fillStyle = color;
+    x.fill();
+    x.globalAlpha = 1;
+    if (problem) {
+      x.strokeStyle = bad;
+      x.lineWidth = 2;
+      x.stroke();
+    }
+    x.restore();
+  };
+  if (E.drag && E.drag.kind === 'wall') {
+    const w = dragWall(E.drag);
+    if (w) {
+      const sh = boxShape('duvar', 'wall', ...wallRect(w));
+      ghost(sh, cssVar('--map-wall'), edCheckShape(d, sh));
+      T.coord = `duvar ${Math.hypot(w[2] - w[0], w[3] - w[1]).toFixed(1)} m`;
+    }
+    return;
+  }
+  if (E.drag) {
+    drawGoalArrow(T, E.drag.a, goalYaw(d, E.drag.a, E.drag.b) * Math.PI / 180, cssVar('--map-goal'));
+    return;
+  }
+  const h = E.hover;
+  if (!h || E.busy) return;
+  const [px, py] = h.q;
+  if (E.tool === 'box' || E.tool === 'cylinder') {
+    const sh = E.tool === 'box' ? boxShape('kutu', 'obstacle', px, py, ED.box, ED.box)
+      : cylShape('silindir', px, py, ED.cyl);
+    ghost(sh, cssVar('--map-obstacle'), edCheckShape(d, sh));
+  } else if (E.tool === 'goal') {
+    const problem = d.goals.length >= ED.maxGoals || edGoalProblem(d, px, py, d.goals.length);
+    drawGoalMarks(T, [{x: px, y: py, yaw: goalYaw(d, [px, py], [px, py]), label: '',
+      color: problem ? bad : cssVar('--map-goal'), width: 2, dash: true}], true);
+  } else if (E.tool === 'wall') {
+    const [cx, cy] = edClamp(h.q);
+    x.save();
+    x.fillStyle = cssVar('--map-wall');
+    x.beginPath();
+    x.arc(T.X(cx), T.Y(cy), 4, 0, 2 * Math.PI);
+    x.fill();
+    x.restore();
+  } else if (E.tool === 'erase') {
+    const hit = edHit(d, h.raw);
+    if (!hit) return;
+    x.save();
+    x.strokeStyle = bad;
+    x.lineWidth = 2;
+    if (hit.list === 'goals') {
+      const [gx, gy] = d.goals[hit.index];
+      x.beginPath();
+      x.arc(T.X(gx), T.Y(gy), 0.3 * T.k, 0, 2 * Math.PI);
+    } else {
+      const prefix = {walls: 'duvar_', boxes: 'kutu_', cylinders: 'silindir_'}[hit.list];
+      shapePath(T, designShapes(d).find((sh) => sh.model === `${prefix}${hit.index + 1}`));
+    }
+    x.stroke();
+    x.restore();
+  }
+}
+
+// Tasarım: şişirme, ızgara, şekiller, ön kontrol yolları, hedefler (yolu olmayan kırmızı), robotun
+// doğduğu yer ve boş kalacak çevresi, fare önizlemesi.
+function drawEditor(cv) {
+  const E = state.ed;
+  const d = E.d;
+  const geometry = designGeometry(d);
+  const T = setupCanvas(cv, geometry.bounds, cssVar('--surface-1'));
+  if (!T) return null;
+  const x = T.x;
+  const P = E.plan;
+  if (P) {
+    if (!E.costCanvas) E.costCanvas = edCostCanvas(P);
+    x.imageSmoothingEnabled = false;
+    x.drawImage(E.costCanvas, T.X(ROOM[0]), T.Y(ROOM[3]), (ROOM[2] - ROOM[0]) * T.k,
+      (ROOM[3] - ROOM[1]) * T.k);
+    x.imageSmoothingEnabled = true;
+  }
+  drawGrid(T, geometry.bounds);
+  drawShapes(T, geometry, false, null);
+  x.save();
+  x.strokeStyle = cssVar('--text-muted');
+  x.setLineDash([3, 3]);
+  x.lineWidth = 1.25;
+  x.beginPath();
+  x.arc(T.X(0), T.Y(0), ED.startClear * T.k, 0, 2 * Math.PI);
+  x.stroke();
+  x.restore();
+  const legs = P ? P.legs : [];
+  legs.forEach((leg) => {
+    if (leg) drawLine(T, leg.pts, cssVar('--map-path'), 2, [5, 4]);
+  });
+  const results = d.goals.map((g, k) => (legs[k] === null ? 'FAILED' : null));
+  drawGoals(T, d.goals.map((g) => [g[0], g[1], g[2], '']), results, null, true);
+  drawRobot(T, [0, 0, 0], true);
+  T.coord = E.hover ? `x ${E.hover.q[0].toFixed(1)} · y ${E.hover.q[1].toFixed(1)}` : '';
+  drawEditOverlay(T);
+  return T;
+}
+
 // --- Geçmiş koşular ------------------------------------------------------------------------
 
 let runsSeq = 0;  // üst üste gelen isteklerde yalnızca sonuncunun yanıtı uygulanır
@@ -1277,8 +2198,14 @@ function runWorlds() {
   const counts = new Map();
   state.runs.forEach((r) => counts.set(worldKey(r), (counts.get(worldKey(r)) || 0) + 1));
   const titles = new Map(worldGroups().map((g) => [g.file, g.title]));
+  // Silinmiş tasarlanmış dünyanın adı koşularından (meta kaydındaki senaryo adı).
+  const named = new Map();
+  state.runs.forEach((r) => {
+    if (r.scenario_name && !named.has(worldKey(r))) named.set(worldKey(r), r.scenario_name);
+  });
   return [...new Set([...titles.keys(), ...counts.keys()])].filter((f) => counts.has(f)).map((f) => (
-    {file: f, title: f === '?' ? 'Bilinmeyen dünya' : titles.get(f) || f, count: counts.get(f)}));
+    {file: f, title: f === '?' ? 'Bilinmeyen dünya' : titles.get(f) || named.get(f) || f,
+      count: counts.get(f)}));
 }
 
 // Dünya süzgeci. Kaydedilmiş seçimin koşusu (henüz) yoksa "Hepsi" gösterilir ama seçim unutulmaz.
@@ -1639,14 +2566,19 @@ async function loadTrack(run) {
     return;
   }
   R.pending[run.id] = true;
+  // Tasarlanan dünyanın (ya da dünyası artık bilinmeyen) koşusu geometriyi kendi meta kaydından
+  // çizer: dünya koşudan sonra düzenlenmiş ya da silinmiş olabilir.
+  const meta = run.files.meta && (CUSTOM_WORLD.test(run.world || '') || !state.worlds[run.world]);
   try {
     // Olay kaydı yoksa ya da okunamazsa koşu olaysız oynar (yörünge yeter).
-    const [traj, events] = await Promise.all([
+    const [traj, events, geometry] = await Promise.all([
       getJson(`/api/runs/${runPath(run.id)}/trajectory`),
       run.files.events ? getJson(`/api/runs/${runPath(run.id)}/events`).then((d) => d.events)
         .catch(() => []) : [],
+      meta ? getJson(`/api/runs/${runPath(run.id)}/meta`).then((m) => m.world_geometry || null)
+        .catch(() => null) : null,
     ]);
-    R.tracks[run.id] = buildTrack(run, traj.pts, events);
+    R.tracks[run.id] = buildTrack(run, traj.pts, events, geometry);
   } catch (e) {
     R.errors[run.id] = e.message;
   } finally {
@@ -1681,8 +2613,8 @@ function trackEvents(events) {
 // (elle hedef olay anında başlar, senaryonunki öncekinin bitişinde: hedefler ardışık gönderilir;
 // bitiş başlangıç + goals.csv'deki süre); hedef etiketleri (1, 2… ve elle E1, E2…); atılan kutular;
 // hareket aralıkları (iki kayıt arası ≤ HOLD_GAP), en uzun takılma ve duraklama. end: zaman
-// ekseninin sonu (robot sonda dururken kayıt yazılmaz).
-function buildTrack(run, pts, events) {
+// ekseninin sonu (robot sonda dururken kayıt yazılmaz). geometry: meta'daki dünya (yoksa null).
+function buildTrack(run, pts, events, geometry) {
   const cum = [0];
   for (let i = 1; i < pts.length; i++) {
     cum.push(cum[i - 1] + Math.hypot(pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]));
@@ -1712,7 +2644,7 @@ function buildTrack(run, pts, events) {
     else moving.push([a, b]);
   }
   return {run, pts, cum, goals, manual, labels, starts, ends, duration, end, moving,
-    boxes: ev.boxes, marks: ev.marks,
+    boxes: ev.boxes, marks: ev.marks, geometry: geometry || null,
     results: goals.map((g) => g.result), recov: goals.map((g) => g.recoveries || 0),
     stuck: longestDwell(pts, end), pause: longestPause(pts, end)};
 }
@@ -1815,6 +2747,7 @@ const ICONS = {
   eyeOff: ['M3 3l18 18', 'M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3 4',
     'M6.6 6.6C3.9 8.4 2 12 2 12s3.5 7 10 7a10 10 0 0 0 5.4-1.6', 'M9.9 9.9a3 3 0 0 0 4.2 4.2'],
   close: ['M6 6l12 12', 'M18 6L6 18'],
+  plus: ['M12 5v14', 'M5 12h14'],
   play: ['M8 5v14l11-7z'],
   pause: ['M8 5v14', 'M16 5v14'],
 };
@@ -2266,8 +3199,12 @@ function drawReplay(cv) {
   const bg = cssVar('--surface-1');
   const runs = pickedRuns();
   if (!runs.length) return setupCanvas(cv, null, bg);
-  const geometry = R.world !== '?' ? state.worlds[R.world] : null;
   const tracks = runs.map((r) => R.tracks[r.id]).filter(Boolean);
+  // Tasarlanan dünyada geometri koşunun kaydından (dünya sonradan düzenlenmiş olabilir); dünyası
+  // katalogda olmayan koşuda da (silinmiş).
+  const recorded = tracks.map((tr) => tr.geometry).find(Boolean) || null;
+  const catalog = R.world !== '?' ? state.worlds[R.world] : null;
+  const geometry = (CUSTOM_WORLD.test(R.world || '') && recorded) || catalog || recorded;
   const shown = tracks.filter((tr) => !R.hidden[tr.run.id]);
   const bounds = geometry ? geometry.bounds : extentOf(tracks, runGoals(runs[0]));
   const T = setupCanvas(cv, bounds, bg);
@@ -2454,6 +3391,28 @@ function drawGrid(T, [x0, y0, x1, y1]) {
   x.stroke();
 }
 
+// Şeklin yolu (doldurmak ya da çizmek için); konum ve yön verilmezse şeklinki.
+function shapePath(T, sh, px = sh.x, py = sh.y, yaw = sh.yaw) {
+  const x = T.x;
+  x.beginPath();
+  if (sh.kind === 'cylinder') {
+    x.arc(T.X(px), T.Y(py), sh.size * T.k, 0, 2 * Math.PI);
+    return;
+  }
+  // Dönük dikdörtgenin köşeleri dünyada hesaplanır (tuval döndürülmez).
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  const hx = sh.size[0] / 2;
+  const hy = sh.size[1] / 2;
+  [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]].forEach(([u, v], i) => {
+    const X = T.X(px + u * c - v * s);
+    const Y = T.Y(py + u * s + v * c);
+    if (i) x.lineTo(X, Y);
+    else x.moveTo(X, Y);
+  });
+  x.closePath();
+}
+
 // outline: şekiller yalnızca çizgiyle. movers: hareketli kutuların canlı konumu {ad: [x, y, yaw]};
 // konumu bilinen kutu her zaman dolu çizilir.
 function drawShapes(T, geometry, outline, movers) {
@@ -2464,23 +3423,7 @@ function drawShapes(T, geometry, outline, movers) {
     const color = colors[sh.role] || colors.obstacle;
     const pose = sh.role === 'moving' && movers ? movers[sh.model] : null;
     const [px, py, yaw] = pose || [sh.x, sh.y, sh.yaw];
-    x.beginPath();
-    if (sh.kind === 'cylinder') {
-      x.arc(T.X(px), T.Y(py), sh.size * T.k, 0, 2 * Math.PI);
-    } else {
-      // Dönük dikdörtgenin köşeleri dünyada hesaplanır (tuval döndürülmez).
-      const c = Math.cos(yaw);
-      const s = Math.sin(yaw);
-      const hx = sh.size[0] / 2;
-      const hy = sh.size[1] / 2;
-      [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]].forEach(([u, v], i) => {
-        const X = T.X(px + u * c - v * s);
-        const Y = T.Y(py + u * s + v * c);
-        if (i) x.lineTo(X, Y);
-        else x.moveTo(X, Y);
-      });
-      x.closePath();
-    }
+    shapePath(T, sh, px, py, yaw);
     if (outline && !pose) {
       x.strokeStyle = color;
       x.lineWidth = 1.25;
@@ -2612,6 +3555,12 @@ function drawMap() {
       kind = shown === 1 ? 'replay1' : 'replay';
       coord = view.coord;
     }
+  } else if (state.mode === 'edit') {
+    view = drawEditor(cv);
+    if (view) {
+      kind = 'edit';
+      coord = view.coord;
+    }
   } else {
     const s = state.mode === 'live' ? scenarioById(state.scenario) : null;
     const geometry = s ? state.worlds[baseName(s.world)] : null;
@@ -2628,7 +3577,7 @@ function drawMap() {
     const h = state.hover;
     if (h && toolsReady()) coord = `fare ${h[0].toFixed(2)}, ${h[1].toFixed(2)}` + (coord ? ` · ${coord}` : '');
   }
-  state.mapT = kind === 'live' || kind === 'preview' ? view : null;
+  state.mapT = kind === 'live' || kind === 'preview' || kind === 'edit' ? view : null;
   if (!view) drawEmpty(cv, emptyText());
   renderMapInfo(kind);
   $('coord').textContent = coord;
@@ -2707,16 +3656,22 @@ function setMode(mode) {
     b.setAttribute('aria-pressed', String(on));
   });
   const replay = mode === 'replay';
+  const edit = mode === 'edit';
   $('liveTop').style.display = mode === 'live' ? '' : 'none';
   $('replayTop').style.display = replay ? '' : 'none';
   $('playbar').style.display = replay ? '' : 'none';
   $('toolbar').style.display = mode === 'live' ? '' : 'none';
   $('layerbar').style.display = mode === 'live' ? '' : 'none';  // P10'da tekrar oynatmada da
+  $('edbar').style.display = edit ? '' : 'none';
   if (mode !== 'live') closeConfirm();
   $('tlBox').style.display = replay ? '' : 'none';
-  $('runCard').style.display = replay ? 'none' : '';
-  $('metrics').style.display = replay ? 'none' : '';
+  $('runCard').style.display = replay || edit ? 'none' : '';
+  $('metrics').style.display = replay || edit ? 'none' : '';
   $('replayCard').style.display = replay ? '' : 'none';
+  $('editCard').style.display = edit ? '' : 'none';
+  $('map').classList.toggle('edit', edit);
+  state.ed.drag = null;
+  if (edit) renderEditor();
   // Tekrar oynatmada koşu seçici geçmiş koşular tablosunun yerini alır.
   $('history').style.display = mode === 'live' ? '' : 'none';
   $('mapTitle').textContent = MODES[mode].title;
@@ -2735,6 +3690,7 @@ function setMode(mode) {
 function onTheme() {
   if (state.live.mapImg) state.live.mapCanvas = recolorMap(state.live.mapImg);
   if (state.live.costmapImg) state.live.costmapCanvas = recolorCostmap(state.live.costmapImg);
+  state.ed.costCanvas = null;  // tasarımın şişirme katmanı yeni renkle yeniden boyanır
   state.legendKey = '';
   drawMap();
   drawPreviews();
@@ -2746,7 +3702,7 @@ function onTheme() {
 document.querySelectorAll('#modes button').forEach((b) => {
   b.addEventListener('click', () => setMode(b.dataset.m));
 });
-$('go').addEventListener('click', startRun);
+$('go').addEventListener('click', () => startRun());
 $('stop').addEventListener('click', stopRun);
 $('gz').addEventListener('change', renderCommand);
 $('rv').addEventListener('change', renderCommand);
@@ -2768,22 +3724,49 @@ $('confirmGo').addEventListener('click', () => {
 });
 $('confirmNo').addEventListener('click', closeConfirm);
 const mapCanvas = $('map');
-mapCanvas.addEventListener('pointerdown', onMapDown);
-mapCanvas.addEventListener('pointermove', onMapMove);
-mapCanvas.addEventListener('pointerup', onMapUp);
+// Fare olayları moda göre: canlıda müdahale araçları, tasarlayıcıda tasarım araçları.
+mapCanvas.addEventListener('pointerdown', (e) => (state.mode === 'edit' ? edDown(e) : onMapDown(e)));
+mapCanvas.addEventListener('pointermove', (e) => (state.mode === 'edit' ? edMove(e) : onMapMove(e)));
+mapCanvas.addEventListener('pointerup', (e) => (state.mode === 'edit' ? edUp(e) : onMapUp(e)));
 mapCanvas.addEventListener('pointercancel', () => {
   state.drag = null;
+  state.ed.drag = null;
   redraw();
 });
 mapCanvas.addEventListener('pointerleave', () => {
   state.hover = null;
-  if (!state.drag) redraw();
+  state.ed.hover = null;
+  if (!state.drag && !state.ed.drag) redraw();
 });
 document.addEventListener('keydown', (e) => {
+  if (state.mode === 'edit') {
+    if (e.key === 'Escape' && state.ed.drag) {
+      state.ed.drag = null;
+      redraw();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && e.target !== $('edName')) {
+      e.preventDefault();
+      edUndo();
+    }
+    return;
+  }
   if (e.key !== 'Escape' || !(state.drag || state.pendingGoal)) return;
   state.drag = null;
   closeConfirm();
 });
+document.querySelectorAll('#edbar [data-etool]').forEach((b) => {
+  b.addEventListener('click', () => edSetTool(b.dataset.etool));
+});
+$('edUndo').addEventListener('click', edUndo);
+$('edName').addEventListener('input', () => {
+  state.ed.d.name = $('edName').value;
+  saveDraft();
+  renderEditor();
+});
+$('edSave').addEventListener('click', () => saveDesign(false));
+$('edRun').addEventListener('click', () => saveDesign(true));
+$('edSample').addEventListener('click', edSample);
+$('edClear').addEventListener('click', edClear);
+$('edNew').addEventListener('click', edNew);
 $('fWorld').addEventListener('change', () => {
   state.filter.world = $('fWorld').value;
   store('panel.runs.world', state.filter.world);
@@ -2880,6 +3863,9 @@ try {
 }
 renderLayers();
 restoreReplay();
+restoreDraft();
+edEvaluate();
+renderEditor();
 renderSpeeds();
 renderRun();
 renderControls();

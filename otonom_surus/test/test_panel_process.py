@@ -293,3 +293,17 @@ def test_kapanista_calisan_kosu_durdurulur(tmp_path):
     runs.shutdown(timeout=10)
     assert not runs.process.running and not runs.process.group_alive()
     assert runs.state()['phase'] == 'stopped'
+
+
+def test_tasarlanan_dunyanin_senaryo_dosyasi_komuta_gider(tmp_path):
+    seen = []
+
+    def command(scenarios_file, **kwargs):
+        seen.append(scenarios_file)
+        return ['bash', '-c', 'exit 0']
+    runs = manager(tmp_path, Events(), command, scenarios_file='/paket/scenarios.yaml')
+    runs.start(100, gui=False, scenarios_file='/panel/panel_scenarios.yaml')
+    assert runs.process.wait(10)
+    runs.start(1, gui=False)  # paketin senaryosu: panelin varsayılan dosyası
+    assert runs.process.wait(10)
+    assert seen == ['/panel/panel_scenarios.yaml', '/paket/scenarios.yaml']

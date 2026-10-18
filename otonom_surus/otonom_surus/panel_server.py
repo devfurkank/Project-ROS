@@ -8,7 +8,8 @@ bütün kuyruklara dağıtır, /api/stream isteği kendi kuyruğunu boşaltır. 
 RunManager'ı alt süreç olarak başlatır ve durdurur; ROS konularını panel_live'ın LiveBridge'i
 önbelleğe alıp hız sınırlı olaylar olarak gönderir; elle hedefi, engel atmayı ve kaldırmayı
 panel_control'ün Controller'ı yapar; geçmiş koşuları panel_runs'ın RunIndex'i results/ altından
-okur. Python standart kütüphanesi ve Pillow yeter.
+okur; "Dünya tasarla"da çizilen dünyaları panel_worlds'ün WorldStore'u .world ve senaryo olarak
+kaydeder. Python standart kütüphanesi ve Pillow yeter.
 
 Sunucu yalnızca 127.0.0.1'e bağlanır (kimlik doğrulama yok); WSL2'nin localhost yönlendirmesi
 sayesinde Windows tarayıcısından http://localhost:<port> ile açılır.
@@ -19,8 +20,14 @@ Uç noktalar:
     GET  /api/stream      SSE: hello (durum, son günlük, canlı verinin son hali), ping, run, log,
                           run_finished, runs_changed; canlı: status, pose, trail, plan, map,
                           obstacles (atılan kutular)
-    GET  /api/worlds      paketteki dünyaların geometrisi (world_sdf)
-    GET  /api/scenarios   scenarios.yaml'daki senaryolar (hedef yaw'ları derece)
+    GET  /api/worlds      dünyaların geometrisi (world_sdf): paketinkiler, sonra tasarlananlar
+                          (custom, scenario, name, design: tasarlayıcının düzenleyeceği biçim)
+    POST /api/worlds      {"id": 100?, "name": "...", "walls": [[x0, y0, x1, y1]], "boxes":
+                          [[x, y, en, boy]], "cylinders": [[x, y, r]], "goals": [[x, y, yaw]]}:
+                          tasarlanan dünyayı kaydeder (id varsa üstüne); SSE worlds_changed
+    DELETE /api/worlds    {"id": 100}: tasarlanan dünyayı siler (koşuları kalır)
+    GET  /api/scenarios   senaryolar (hedef yaw'ları derece): scenarios.yaml'dakiler, sonra
+                          tasarlanan dünyalarınkiler (custom; numaralar 100'den başlar)
     GET  /api/run         koşunun durumu
     POST /api/run/start   {"scenario": 1, "gui": true, "rviz": false}
     POST /api/free/start  aynı gövde: serbest sürüş (senaryonun dünyası, hedefleri panel verir)
@@ -58,19 +65,22 @@ from otonom_surus.panel_control import (
 from otonom_surus.panel_live import LAYERS, LiveBridge
 from otonom_surus.panel_process import RunError, RunManager
 from otonom_surus.panel_runs import RunIndex
+from otonom_surus.panel_worlds import DesignError, WorldStore
 from otonom_surus.scenarios import load_scenario, scenario_numbers
 from otonom_surus.world_sdf import world_geometry
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+import yaml
 
-VERSION = '0.7.0'
+VERSION = '0.9.0'
 HOST = '127.0.0.1'  # bilerek parametre değil: panelin ağa açılmaması için (PT18)
 PING_PERIOD = 5.0  # s; istemci 10 s veri alamazsa bağlantıyı kopmuş sayar
 SSE_RETRY_MS = 3000  # tarayıcının kopunca yeniden bağlanma aralığı
 CLIENT_QUEUE = 256  # sekme başına bekleyen olay sınırı; dolunca en eski düşer
 MAX_BODY = 64 * 1024  # POST gövdesi sınırı
 READY = ('running', 'recovering', 'idle')  # /mission_status: görev hedef ve engel kabul eder
+BUSY = ('starting', 'running', 'finishing', 'stopping')  # RunManager: koşu sürüyor
 # Koşu dizininin dosya uçları: yol eki -> RunIndex yöntemi ve kayıt yoksa iletisi.
 RUN_FILES = {'/events': ('events', 'olay kaydı yok'), '/meta': ('meta', 'meta kaydı yok')}
 
@@ -414,13 +424,16 @@ class PanelServer(Node):
         self.scenarios_file = self.declare_parameter('scenarios_file', default_scenarios).value
         self.worlds_dir = os.path.join(share, 'worlds')
         self.broadcaster = Broadcaster()
+        # Tasarlanan dünyalar (P9): results_dir/worlds/ + results_dir/panel_scenarios.yaml.
+        self.store = WorldStore(self.results_dir, reserved=self.package_numbers())
         self.index = RunIndex(
             self.runs_root, panel_dir=self.results_dir,
             base_params=os.path.join(share, 'config', 'nav2_params.yaml'),
-            scenario_files=[self.scenarios_file,
-                            os.path.join(self.results_dir, 'panel_scenarios.yaml')])
+            scenario_files=[self.scenarios_file, self.store.scenarios_file])
         self.announced = set()  # bittiği runs_changed ile duyurulan görevler (run_id)
-        self.geometries = {}  # dünya dosyası -> world_geometry (müdahale denetimleri)
+        # (dünya dosyası, değişim zamanı) -> world_geometry (müdahale denetimleri); tasarlanan
+        # dünya düzenlenince yeniden okunur.
+        self.geometries = {}
         self.live = LiveBridge(self, self.broadcaster.publish, on_status=self.on_mission_status,
                                movers=self.mover_names(), wants=self.broadcaster.wants)
         self.control = Controller(self, self.broadcaster.publish)
@@ -429,6 +442,20 @@ class PanelServer(Node):
         self.runs = RunManager(self.results_dir, self.on_run_event, scenarios_file=custom,
                                cwd=os.getcwd(), on_finish=self.control.finish)
         self.started = time.monotonic()
+
+    def package_numbers(self):
+        try:
+            return scenario_numbers(self.scenarios_file)
+        except (OSError, yaml.YAMLError):
+            return []
+
+    def scenario_source(self, number):
+        """Senaryoyu tanımlayan dosya: paketinki ya da tasarlanan dünyalarınki; yoksa None."""
+        if number in scenario_numbers(self.scenarios_file):
+            return self.scenarios_file
+        if self.store.owns(number):
+            return self.store.scenarios_file
+        return None
 
     def mover_names(self):
         """Bütün senaryolardaki hareketli kutuların adları (canlı konumları için abone olunur)."""
@@ -506,6 +533,8 @@ class PanelServer(Node):
             ('POST', '/api/obstacle'): lambda: self.add_obstacle(body),
             ('DELETE', '/api/obstacle'): lambda: self.remove_obstacles(body),
             ('POST', '/api/layers'): lambda: set_layers(self.broadcaster, self.live, body),
+            ('POST', '/api/worlds'): lambda: self.save_world(body),
+            ('DELETE', '/api/worlds'): lambda: self.delete_world(body),
         }
         handler = handlers.get((method, path))
         if handler is None:
@@ -538,13 +567,15 @@ class PanelServer(Node):
         if status.get('run_id') != run.get('run_id') or status.get('state') not in READY:
             raise ControlError('Görev henüz hazır değil (Nav2 bekleniyor).', 409)
         try:
-            scenario = load_scenario(self.scenarios_file, run['scenario'])
-            world = os.path.join(self.worlds_dir, scenario['world'])
-            if world not in self.geometries:
-                self.geometries[world] = world_geometry(world)
-        except (OSError, ValueError, ET.ParseError) as e:
+            scenario = load_scenario(self.scenario_source(run['scenario']) or self.scenarios_file,
+                                     run['scenario'])
+            world = os.path.join(self.worlds_dir, scenario['world'])  # mutlak yol olduğu gibi
+            key = (world, os.stat(world).st_mtime_ns)
+            if key not in self.geometries:
+                self.geometries[key] = world_geometry(world)
+        except (OSError, ValueError, ET.ParseError, yaml.YAMLError) as e:
             raise ControlError(f'Dünya okunamadı: {e}', 500) from None
-        return scenario, self.geometries[world], view
+        return scenario, self.geometries[key], view
 
     @staticmethod
     def point(body):
@@ -606,21 +637,82 @@ class PanelServer(Node):
                                'geometry': world_geometry(os.path.join(self.worlds_dir, name))})
             except (ET.ParseError, OSError, ValueError) as e:
                 worlds.append({'file': name, 'error': str(e)})
+        try:
+            entries = self.store.entries()
+        except (OSError, yaml.YAMLError) as e:
+            self.get_logger().warn(f'Tasarlanan dünyalar okunamadı: {e}')
+            entries = []
+        for e in entries:
+            world = {'file': e['file'] or f'ozel_{e["id"]}.world', 'custom': True,
+                     'scenario': e['id'], 'name': e['name']}
+            if 'error' in e:
+                world['error'] = e['error']
+            else:
+                world.update(geometry=e['geometry'], design=e['design'])
+            worlds.append(world)
         return 200, worlds
+
+    @staticmethod
+    def scenario_entry(number, s, custom):
+        return {'id': number, 'name': s['name'], 'world': s['world'],
+                'goals': [[x, y, round(math.degrees(yaw), 1)] for x, y, yaw in s['goals']],
+                'moving_obstacles': s['moving_obstacles'], 'custom': custom}
 
     def scenarios(self):
         try:
-            result = []
-            for number in scenario_numbers(self.scenarios_file):
-                s = load_scenario(self.scenarios_file, number)
-                result.append({
-                    'id': number, 'name': s['name'], 'world': s['world'],
-                    'goals': [[x, y, round(math.degrees(yaw), 1)] for x, y, yaw in s['goals']],
-                    'moving_obstacles': s['moving_obstacles'],
-                })
+            result = [self.scenario_entry(n, load_scenario(self.scenarios_file, n), False)
+                      for n in scenario_numbers(self.scenarios_file)]
         except (OSError, ValueError) as e:
             return 500, {'error': f'{self.scenarios_file}: {e}'}
+        # Tasarlanan dünyaların dosyası bozuksa paketin senaryoları yine listelenir.
+        try:
+            for number in self.store.numbers():
+                result.append(self.scenario_entry(
+                    number, load_scenario(self.store.scenarios_file, number), True))
+        except (OSError, ValueError) as e:
+            self.get_logger().warn(f'{self.store.scenarios_file}: {e}')
         return 200, result
+
+    def busy_with(self, number):
+        """Panelin sürmekte olan koşusu bu senaryoda mı (dünyası düzenlenemez, silinemez)."""
+        run = self.runs.state()
+        return run['phase'] in BUSY and run.get('scenario') == number
+
+    def save_world(self, body):
+        """POST /api/worlds: tasarımı kaydeder (yeni ya da id'nin üstüne)."""
+        number = body.get('id')
+        if number is not None and self.busy_with(number):
+            return 409, {'error': 'Bu dünyada bir koşu sürüyor; düzenlemeden önce durdur.'}
+        try:
+            entry = self.store.save(body)
+        except DesignError as e:
+            return 400, {'error': str(e)}
+        except KeyError:
+            return 404, {'error': f'Kayıtlı dünya yok: {number} (silinmiş olabilir)'}
+        except (OSError, yaml.YAMLError) as e:
+            return 500, {'error': f'Dünya kaydedilemedi: {e}'}
+        verb = 'güncellendi' if number is not None else 'kaydedildi'
+        self.get_logger().info(
+            f'Dünya {verb}: S{entry["id"]} {entry["name"]} ({entry["world_file"]})')
+        self.broadcaster.publish('worlds_changed', {'id': entry['id']})
+        return 200, entry
+
+    def delete_world(self, body):
+        """DELETE /api/worlds: tasarlanan dünyayı ve senaryosunu siler; koşuları kalır."""
+        number = body.get('id')
+        if isinstance(number, bool) or not isinstance(number, int):
+            return 400, {'error': 'id tamsayı olmalı'}
+        if self.busy_with(number):
+            return 409, {'error': 'Bu dünyada bir koşu sürüyor; silmeden önce durdur.'}
+        try:
+            removed = self.store.delete(number)
+        except KeyError:
+            return 404, {'error': f'Kayıtlı dünya yok: {number}'}
+        except (OSError, yaml.YAMLError) as e:
+            return 500, {'error': f'Dünya silinemedi: {e}'}
+        self.get_logger().info(f'Dünya silindi: S{number} {removed.get("name")}')
+        self.broadcaster.publish('worlds_changed', {'id': number, 'deleted': True})
+        return 200, {'id': number, 'deleted': True}
 
     def start_run(self, body, mode='scenario'):
         """Senaryo koşusu ya da (mode 'interactive') senaryonun dünyasında serbest sürüş."""
@@ -629,14 +721,18 @@ class PanelServer(Node):
         except (TypeError, ValueError):
             return 400, {'error': 'scenario tamsayı olmalı'}
         try:
-            known = scenario_numbers(self.scenarios_file)
-        except OSError as e:
-            return 500, {'error': f'{self.scenarios_file}: {e}'}
-        if scenario not in known:
+            source = self.scenario_source(scenario)
+        except (OSError, yaml.YAMLError) as e:
+            return 500, {'error': f'Senaryo dosyası okunamadı: {e}'}
+        if source is None:
+            known = self.package_numbers() + self.store.numbers()
             return 400, {'error': f'senaryo {scenario} tanımlı değil (tanımlı: {known})'}
+        # Tasarlanan dünyanın senaryosu kendi dosyasından (paketinki varsayılan, komuta yazılmaz).
+        custom = None if source == self.scenarios_file else source
         try:
             state = self.runs.start(scenario, gui=bool(body.get('gui', True)),
-                                    rviz=bool(body.get('rviz', False)), mode=mode)
+                                    rviz=bool(body.get('rviz', False)), mode=mode,
+                                    scenarios_file=custom)
         except RunError as e:
             return 409, {'error': str(e)}
         self.get_logger().info(f'Koşu başladı: {state["command"]}')
