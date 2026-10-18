@@ -13,11 +13,13 @@ import math
 from geometry_msgs.msg import PoseStamped, Quaternion, TransformStamped
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from otonom_surus.panel_live import (
-    LiveBridge, MAP_EVERY, map_png, PATH_EVERY, thin_path, yaw_of)
+    costmap_png, cylinders, LAYER_EVERY, LiveBridge, MAP_EVERY, map_png, PATH_EVERY, scan_ranges,
+    thin_path, yaw_of)
 from PIL import Image
 import pytest
 import rclpy
 from rclpy.context import Context
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Float32, String
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -47,21 +49,57 @@ def test_dordeyden_yaw():
         assert math.isclose(yaw_of(q), yaw, abs_tol=1e-9)
 
 
+def test_tarama_seyreltilir_ve_gecersiz_olcum_sifir():
+    ranges = [0.5, 9.0, float('inf'), 1.234, 0.05, 2.0, 3.5, float('nan')]
+    assert scan_ranges(ranges, 0.12, 3.5) == [50, 0, 0, 350]  # her ikinci ışın
+    assert scan_ranges(ranges, 0.12, 3.5, stride=1) == [50, 0, 0, 123, 0, 200, 350, 0]
+
+
+def test_costmap_degerleri_kendisiyle_png_ve_kuzey_yukari():
+    data = [0, 50, -1,     # ızgaranın 0. satırı: haritanın altı
+            99, 100, 1]
+    image = Image.open(io.BytesIO(costmap_png(3, 2, data)))
+    assert image.mode == 'L' and list(image.getdata()) == [99, 100, 1, 0, 50, 255]
+
+
+def test_kumeler_silindirlerden():
+    cylinder = Marker(type=Marker.CYLINDER, action=Marker.ADD)
+    cylinder.pose.position.x, cylinder.pose.position.y = 1.23456, -0.5
+    cylinder.scale.x = 0.4
+    markers = [Marker(action=Marker.DELETEALL), cylinder,
+               Marker(type=Marker.LINE_STRIP, action=Marker.ADD)]  # duvar: küme değil
+    assert cylinders(markers) == [[1.235, -0.5, 0.2]]
+
+
 @pytest.fixture
 def bridge():
     context = Context()
     rclpy.init(context=context)
     node = rclpy.create_node('test_panel_live', context=context)
     events, statuses = [], []
-    live = LiveBridge(node, lambda event, data: events.append((event, data)),
+    live = LiveBridge(node, lambda event, data, layer=None: events.append((event, data)),
                       on_status=statuses.append, movers=['engel1'])
     yield live, events, statuses
     node.destroy_node()
     rclpy.shutdown(context=context)
 
 
+@pytest.fixture
+def layered():
+    """Katmanlı köprü: olaylar katmanıyla kaydedilir, istenen katmanlar değiştirilebilir."""
+    context = Context()
+    rclpy.init(context=context)
+    node = rclpy.create_node('test_panel_live_katman', context=context)
+    events, wanted = [], set()
+    live = LiveBridge(node, lambda event, data, layer=None: events.append((event, data, layer)),
+                      wants=lambda layer: layer in wanted)
+    yield live, events, wanted
+    node.destroy_node()
+    rclpy.shutdown(context=context)
+
+
 def of(events, kind):
-    return [data for event, data in events if event == kind]
+    return [e[1] for e in events if e[0] == kind]  # (olay, veri) ya da (olay, veri, katman)
 
 
 def ticks(live, count):
@@ -223,3 +261,85 @@ def test_sim_zamani_geri_gidince_tf_temizlenir(bridge):
     live.tf_buffer.set_transform(transform(0.1, 0.0, 0.0, 0.2), 'test')  # eskisi kalsa atılırdı
     live.tick()
     assert [(p['x'], p['t']) for p in of(events, 'pose')] == [(4.0, 45.0), (0.1, 0.2)]
+
+
+def scan(stamp, ranges, frame='base_scan'):
+    msg = LaserScan()
+    msg.header.frame_id = frame
+    msg.header.stamp.sec, msg.header.stamp.nanosec = int(stamp), round(stamp % 1 * 1e9)
+    msg.angle_min, msg.angle_increment = 0.0, math.radians(1.0)
+    msg.range_min, msg.range_max = 0.12, 3.5
+    msg.ranges = ranges
+    return msg
+
+
+def sensor_tf(x, y, yaw, stamp):
+    t = transform(x, y, yaw, stamp)
+    t.child_frame_id = 'base_scan'
+    return t
+
+
+def test_tarama_yalnizca_istenirse_ve_sensorun_tarama_anindaki_pozuyla(layered):
+    live, events, wanted = layered
+    live.tf_buffer.set_transform(sensor_tf(1.0, 2.0, 0.0, 10.0), 'test')
+    live.tf_buffer.set_transform(sensor_tf(1.2, 2.0, 0.0, 10.4), 'test')
+    live.on_scan(scan(10.2, [1.0] * 360))
+    ticks(live, LAYER_EVERY)
+    assert of(events, 'scan') == []  # LiDAR katmanı kapalı: kodlanmaz, gönderilmez
+    assert live.layer_snapshot('lidar') is None
+
+    wanted.add('lidar')
+    live.on_scan(scan(10.2, [1.0, 0.0] * 180))
+    ticks(live, LAYER_EVERY)
+    [event] = of(events, 'scan')
+    assert (event['x'], event['y'], event['t']) == (1.1, 2.0, 10.2)  # 10.0 ile 10.4 arası
+    assert event['a0'] == 0.0 and math.isclose(event['da'], math.radians(2.0), rel_tol=1e-4)
+    assert event['rmax'] == 3.5 and event['r'] == [100] * 180
+    assert [e[2] for e in events if e[0] == 'scan'] == ['lidar']
+    json.dumps(event, allow_nan=False)
+    ticks(live, LAYER_EVERY)
+    assert len(of(events, 'scan')) == 1  # yeni tarama gelmedi: tekrar gönderilmez
+    assert live.layer_snapshot('lidar') == ('scan', event)
+
+    live.on_scan(scan(99.0, [2.0] * 360))  # damgadaki TF yok: en son TF kullanılır
+    ticks(live, LAYER_EVERY)
+    assert of(events, 'scan')[-1]['x'] == 1.2
+
+
+def test_kumeler_degisince_ve_costmap_1_hz_yalnizca_istenirse(layered):
+    live, events, wanted = layered
+    cylinder = Marker(type=Marker.CYLINDER, action=Marker.ADD)
+    cylinder.pose.position.x, cylinder.scale.x = 1.0, 0.3
+    live.on_markers(MarkerArray(markers=[cylinder]))
+    msg = grid([0, 50, 100, -1], 2, 2)
+    live.on_costmap(msg)
+    ticks(live, MAP_EVERY)
+    assert of(events, 'clusters') == [] and of(events, 'costmap') == []
+    # Kümeler istenmese de son hali saklanır: katmanı sonra açan sekme hemen görür.
+    assert live.layer_snapshot('clusters') == ('clusters', {'c': [[1.0, 0.0, 0.15]]})
+    assert live.layer_snapshot('costmap') is None  # costmap istenmeden kodlanmaz
+
+    wanted.update({'clusters', 'costmap'})
+    live.on_markers(MarkerArray(markers=[cylinder]))  # aynı kümeler: olay yok
+    cylinder.pose.position.y = 0.5
+    live.on_markers(MarkerArray(markers=[cylinder]))
+    ticks(live, MAP_EVERY)
+    assert of(events, 'clusters') == [{'c': [[1.0, 0.5, 0.15]]}]
+    [costmap] = of(events, 'costmap')
+    image = Image.open(io.BytesIO(base64.b64decode(costmap['png'])))
+    assert list(image.getdata()) == [100, 255, 0, 50]
+    assert (costmap['w'], costmap['ox'], costmap['oy']) == (2, -1.0, -2.0)
+    assert {e[2] for e in events if e[0] in ('clusters', 'costmap')} == {'clusters', 'costmap'}
+
+    live.on_costmap(grid([0, 50, 100, -1], 2, 2))  # aynı içerik
+    ticks(live, MAP_EVERY)
+    assert len(of(events, 'costmap')) == 1
+    moved = grid([0, 50, 100, -1], 2, 2)
+    moved.info.origin.position.x = -0.95  # kayan pencere: aynı değerler, yeni yer
+    live.on_costmap(moved)
+    ticks(live, MAP_EVERY)
+    assert of(events, 'costmap')[-1]['ox'] == -0.95
+    assert live.layer_snapshot('costmap') == ('costmap', of(events, 'costmap')[-1])
+
+    live.reset()
+    assert all(live.layer_snapshot(n) is None for n in ('lidar', 'clusters', 'costmap'))

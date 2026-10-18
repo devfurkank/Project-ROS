@@ -5,6 +5,8 @@
 // hayalet robotlar kaydedilmiş yörüngelerinde birlikte oynar; zaman çizelgesi, koşu kartları, fark.
 // P6: müdahale: haritaya tıkla-git (elle hedef, E1, E2…), Gazebo'ya kutu at / kaldır, serbest sürüş;
 // tekrar oynatmada olay kaydı (kutular ve elle hedefler kendi anlarında).
+// P7: canlı haritada katmanlar: LiDAR ışınları ve isabetleri, Nav2 global costmap, engel kümeleri;
+// sekme açtığı katmanları sunucuya bildirir, kapalı katmanın verisi gelmez.
 // Sunucuyla iki yol: /api/stream (SSE, sunucu -> tarayıcı) ve /api/... (JSON istekleri).
 'use strict';
 
@@ -94,6 +96,22 @@ const LEGENDS = {
 // Tek koşu görünürken hedefler sonucuyla renklenir.
 LEGENDS.replay1 = LEGENDS.replay.slice(0, 5).concat(
   [['ring', '--map-ok', 'Varıldı'], ['ring', '--map-bad', 'Başarısız']], LEGENDS.replay.slice(5));
+// Açık katmanların lejantı canlı lejantın sonuna eklenir.
+const LAYER_LEGENDS = {
+  lidar: ['box', '--map-robot', 'LiDAR isabeti (ışınlar soluk)'],
+  costmap: ['cost', '--map-cost', 'Costmap: maliyet (koyu: ölümcül)'],
+  clusters: ['dashring', '--text-primary', 'Algılanan engel kümesi'],
+};
+const LAYER_NAMES = ['lidar', 'costmap', 'clusters'];
+// Costmap değeri (0–100, bilinmeyen 255) -> saydamlık: 0 ve bilinmeyen saydam, 1–98 artan,
+// 99 robot sığmaz, 100 ölümcül. Tek ton (--map-cost); maliyet koyulukla okunur.
+const COST_ALPHA = (() => {
+  const t = new Uint8ClampedArray(256);
+  for (let v = 1; v <= 98; v++) t[v] = Math.round(255 * (0.08 + 0.37 * (v - 1) / 97));
+  t[99] = Math.round(255 * 0.6);
+  t[100] = Math.round(255 * 0.8);
+  return t;
+})();
 
 const state = {
   mode: 'live',
@@ -120,6 +138,9 @@ const state = {
   pendingGoal: null,
   toolBusy: false,
   toolMsg: null,  // {text, bad, until}
+  // Katmanlar (sekme başına; tarayıcıda hatırlanır) ve sunucunun bu sekmeye verdiği kimlik.
+  layers: {lidar: true, costmap: false, clusters: true},
+  clientId: null,
   // Geçmiş koşular (/api/runs, en yeni önce). freshId: bu sekmede az önce biten koşu.
   runs: [],
   runsRoot: '',
@@ -136,10 +157,13 @@ const state = {
 };
 
 // Canlı verinin önbelleği; yeni koşu başlarken boşaltılır. scenario: verinin ait olduğu senaryo.
-// boxes: panelin attığı kutular ({name, x, y, size}).
+// boxes: panelin attığı kutular ({name, x, y, size}). Katmanlar: scan (son tarama), clusters
+// ([x, y, r]), costmap (olay + çözülmüş resim + renklendirilmiş tuval).
 function emptyLive() {
   return {scenario: null, status: null, statusAt: 0, pose: null, poseAt: 0, trail: [], plan: [],
-    map: null, mapImg: null, mapCanvas: null, pendingMap: null, boxes: []};
+    map: null, mapImg: null, mapCanvas: null, pendingMap: null, boxes: [],
+    scan: null, clusters: null, costmap: null, costmapImg: null, costmapCanvas: null,
+    pendingCostmap: null};
 }
 
 // --- Yardımcılar ---------------------------------------------------------------------------
@@ -273,6 +297,8 @@ function connect() {
   });
   on('hello', (hello) => {
     setHealth(hello);
+    state.clientId = hello.client || null;
+    postLayers();  // yeni bağlantı yeni kimlik: katmanlar yeniden bildirilir
     $('log').textContent = '';
     (hello.log || []).forEach((entry) => addLog(entry));
     applyRun(hello.run || {phase: 'idle'}, true);
@@ -309,6 +335,15 @@ function connect() {
     renderTools();
     redraw();
   });
+  on('scan', (d) => {
+    state.live.scan = d;
+    redraw();
+  });
+  on('clusters', (d) => {
+    state.live.clusters = d.c || [];
+    redraw();
+  });
+  on('costmap', setCostmap);
   es.onerror = () => {
     setConnection(false);
     // CONNECTING iken tarayıcı kendisi yeniden dener (sunucunun retry süresiyle);
@@ -772,6 +807,129 @@ function recolorMap(img) {
   }
   x.putImageData(d, 0, 0);
   return c;
+}
+
+// --- Katmanlar -----------------------------------------------------------------------------
+// Sekme açtığı katmanları sunucuya bildirir (kimliği hello'da gelir); sunucu yalnızca açık
+// katmanların verisini üretip bu sekmeye gönderir (PT16). Seçim tarayıcıda hatırlanır.
+
+async function postLayers() {
+  if (!state.clientId) return;
+  try {
+    await post('/api/layers', {client: state.clientId, ...state.layers});
+    setText($('layerMsg'), '');
+  } catch (e) {
+    setText($('layerMsg'), `Katmanlar bildirilemedi: ${e.message}`);
+  }
+}
+
+function toggleLayer(name) {
+  state.layers[name] = !state.layers[name];
+  store('panel.layers', JSON.stringify(state.layers));
+  renderLayers();
+  postLayers();
+  state.legendKey = '';  // lejant açık katmanlara göre yeniden kurulsun
+  redraw();
+}
+
+function renderLayers() {
+  document.querySelectorAll('#layerbar [data-layer]').forEach((b) => {
+    const on = Boolean(state.layers[b.dataset.layer]);
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+}
+
+// Costmap PNG'si (değerler 0–100, bilinmeyen 255) çözülüp tek tonla, değere göre saydamlıkla
+// boyanır; tema değişince yeniden boyanır.
+function setCostmap(m) {
+  const L = state.live;
+  L.pendingCostmap = m;
+  const img = new Image();
+  img.onload = () => {
+    if (state.live !== L || L.pendingCostmap !== m) return;
+    L.costmap = m;
+    L.costmapImg = img;
+    L.costmapCanvas = recolorCostmap(img);
+    redraw();
+  };
+  img.src = `data:image/png;base64,${m.png}`;
+}
+
+function recolorCostmap(img) {
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  const x = c.getContext('2d');
+  x.drawImage(img, 0, 0);
+  const d = x.getImageData(0, 0, c.width, c.height);
+  const [r, g, b] = colorRgb(cssVar('--map-cost'));
+  const p = d.data;
+  for (let i = 0; i < p.length; i += 4) {
+    const a = COST_ALPHA[p[i]];
+    p[i] = r;
+    p[i + 1] = g;
+    p[i + 2] = b;
+    p[i + 3] = a;
+  }
+  x.putImageData(d, 0, 0);
+  return c;
+}
+
+function drawCostmap(T, live) {
+  const m = live.costmap;
+  if (!m || !live.costmapCanvas) return;
+  const x = T.x;
+  x.imageSmoothingEnabled = false;
+  x.drawImage(live.costmapCanvas, T.X(m.ox), T.Y(m.oy + m.h * m.res), m.w * m.res * T.k,
+    m.h * m.res * T.k);
+  x.imageSmoothingEnabled = true;
+}
+
+// LiDAR: sensörden ışınlar (soluk; ölçüm yoksa menzil sonuna kadar) ve isabet noktaları.
+function drawScan(T, s, color) {
+  const x = T.x;
+  const ox = T.X(s.x);
+  const oy = T.Y(s.y);
+  const end = (cm, i) => {
+    const a = s.th + s.a0 + i * s.da;
+    const R = cm ? cm / 100 : s.rmax;
+    return [T.X(s.x + Math.cos(a) * R), T.Y(s.y + Math.sin(a) * R)];
+  };
+  x.save();
+  x.strokeStyle = color;
+  x.globalAlpha = 0.12;
+  x.lineWidth = 1;
+  x.beginPath();
+  s.r.forEach((cm, i) => {
+    const [ex, ey] = end(cm, i);
+    x.moveTo(ox, oy);
+    x.lineTo(ex, ey);
+  });
+  x.stroke();
+  x.globalAlpha = 0.9;
+  x.fillStyle = color;
+  s.r.forEach((cm, i) => {
+    if (!cm) return;
+    const [ex, ey] = end(cm, i);
+    x.fillRect(ex - 1.5, ey - 1.5, 3, 3);
+  });
+  x.restore();
+}
+
+// Engel kümeleri: obstacle_detector'ın silindirleri, merkezde kesikli halka (yarıçap + 5 cm).
+function drawClusters(T, clusters, color) {
+  const x = T.x;
+  x.save();
+  x.strokeStyle = color;
+  x.lineWidth = 1.5;
+  x.setLineDash([4, 3]);
+  clusters.forEach(([cx, cy, r]) => {
+    x.beginPath();
+    x.arc(T.X(cx), T.Y(cy), Math.max(r + 0.05, 0.08) * T.k, 0, 2 * Math.PI);
+    x.stroke();
+  });
+  x.restore();
 }
 
 function setMetric(id, text, extra, cls) {
@@ -2241,6 +2399,7 @@ function drawWorld(cv, geometry, scenario, detailed, live, goals) {
     cssVar(detailed ? '--surface-1' : '--surface-2'));
   if (!T) return null;
   if (live) drawSlam(T, live);
+  if (live && state.layers.costmap) drawCostmap(T, live);  // haritanın üstünde, engellerin altında
   if (detailed) drawGrid(T, geometry.bounds);
   // SLAM haritası varken gerçek geometri yalnızca çizgiyle: aradaki fark görünsün.
   drawShapes(T, geometry, Boolean(live && live.mapCanvas), live && live.pose ? live.pose.movers : null);
@@ -2257,6 +2416,10 @@ function drawWorld(cv, geometry, scenario, detailed, live, goals) {
   if (scenario) {
     drawGoals(T, goals || scenario.goals, st ? st.goal_results : [], st ? st.goal_index : null,
       detailed);
+  }
+  if (live && state.layers.lidar && live.scan) drawScan(T, live.scan, cssVar('--map-robot'));
+  if (live && state.layers.clusters && live.clusters) {
+    drawClusters(T, live.clusters, cssVar('--text-primary'));
   }
   const p = live ? live.pose : null;
   drawRobot(T, p ? [p.x, p.y, p.th] : [0, 0, null], detailed);
@@ -2502,21 +2665,28 @@ function redraw() {
 // Lejant ve açıklama haritanın türüne göre (önizleme / canlı / tekrar oynatma); yalnızca tür
 // değişince kurulur.
 function renderMapInfo(key) {
-  if (key === state.legendKey) return;
-  state.legendKey = key;
+  // Canlı lejant açık katmanlara göre değişir.
+  const layers = key === 'live' ? LAYER_NAMES.filter((n) => state.layers[n]) : [];
+  const sig = `${key}:${layers.join(',')}`;
+  if (sig === state.legendKey) return;
+  state.legendKey = sig;
   $('hint').textContent = {live: LIVE_HINT + TOOLS_HINT, replay: REPLAY_HINT,
     replay1: REPLAY_HINT}[key] || MODES[state.mode].hint;
   const box = $('legend');
   box.textContent = '';
   box.style.display = key === 'none' ? 'none' : '';
-  (LEGENDS[key] || []).forEach(([kind, v, text]) => {
+  (LEGENDS[key] || []).concat(layers.map((n) => LAYER_LEGENDS[n])).forEach(([kind, v, text]) => {
     const item = el('span');
     const sw = el('i');
     const color = `var(${v})`;
     if (kind === 'ring' || kind === 'outline') sw.style.border = `${kind === 'ring' ? 2 : 1.5}px solid ${color}`;
+    else if (kind === 'dashring') sw.style.border = `1.5px dashed ${color}`;
     else if (kind === 'dash') sw.style.borderTop = `2px dashed ${color}`;
-    else sw.style.background = color;
-    sw.style.borderRadius = kind === 'dot' || kind === 'ring' ? '50%' : '2px';
+    else if (kind === 'cost') {
+      sw.style.background = `linear-gradient(90deg, color-mix(in srgb, ${color} 15%, transparent), ${color})`;
+      sw.style.width = '18px';
+    } else sw.style.background = color;
+    sw.style.borderRadius = kind === 'dot' || kind === 'ring' || kind === 'dashring' ? '50%' : '2px';
     if (kind === 'line' || kind === 'dash') {
       sw.style.width = '14px';
       sw.style.height = kind === 'line' ? '3px' : '0';
@@ -2541,6 +2711,7 @@ function setMode(mode) {
   $('replayTop').style.display = replay ? '' : 'none';
   $('playbar').style.display = replay ? '' : 'none';
   $('toolbar').style.display = mode === 'live' ? '' : 'none';
+  $('layerbar').style.display = mode === 'live' ? '' : 'none';  // P10'da tekrar oynatmada da
   if (mode !== 'live') closeConfirm();
   $('tlBox').style.display = replay ? '' : 'none';
   $('runCard').style.display = replay ? 'none' : '';
@@ -2563,6 +2734,8 @@ function setMode(mode) {
 
 function onTheme() {
   if (state.live.mapImg) state.live.mapCanvas = recolorMap(state.live.mapImg);
+  if (state.live.costmapImg) state.live.costmapCanvas = recolorCostmap(state.live.costmapImg);
+  state.legendKey = '';
   drawMap();
   drawPreviews();
   renderFrame();  // tuvallerin renkleri çizerken okunur; kartlar CSS değişkeni kullanıyor
@@ -2585,6 +2758,9 @@ $('free').addEventListener('change', () => {
 });
 document.querySelectorAll('#toolbar [data-tool]').forEach((b) => {
   b.addEventListener('click', () => setTool(b.dataset.tool));
+});
+document.querySelectorAll('#layerbar [data-layer]').forEach((b) => {
+  b.addEventListener('click', () => toggleLayer(b.dataset.layer));
 });
 $('clearBoxes').addEventListener('click', () => removeBoxes(null));
 $('confirmGo').addEventListener('click', () => {
@@ -2692,6 +2868,17 @@ state.filter.result = ['ok', 'bad'].includes(restore('panel.runs.result')) ? res
 state.free = restore('panel.free') === '1';
 $('free').checked = state.free;
 if (TOOL_HINTS[restore('panel.tool')]) state.tool = restore('panel.tool');
+try {
+  const saved = JSON.parse(restore('panel.layers') || 'null');
+  if (saved && typeof saved === 'object') {
+    LAYER_NAMES.forEach((n) => {
+      if (typeof saved[n] === 'boolean') state.layers[n] = saved[n];
+    });
+  }
+} catch (e) {
+  // Bozuk kayıt: varsayılan katmanlar (LiDAR ve kümeler açık, costmap kapalı).
+}
+renderLayers();
 restoreReplay();
 renderSpeeds();
 renderRun();

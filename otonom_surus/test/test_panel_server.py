@@ -7,7 +7,7 @@ import threading
 
 from otonom_surus.panel_runs import RUN_FIELDS, RunIndex
 from otonom_surus.panel_server import (
-    Broadcaster, make_server, resolve_static, runs_route, sse_event)
+    Broadcaster, make_server, resolve_static, runs_route, set_layers, sse_event)
 import pytest
 
 
@@ -69,6 +69,57 @@ def test_dolu_kuyrukta_en_eski_olay_duser():
     for t in range(3):
         b.publish('ping', {'t': t})
     assert [q.get_nowait() for _ in range(2)] == [sse_event('ping', {'t': t}) for t in (1, 2)]
+
+
+def drain(q):
+    items = []
+    while not q.empty():
+        items.append(q.get_nowait())
+    return items
+
+
+def test_katman_olaylari_yalnizca_acan_sekmeye():
+    b = Broadcaster()
+    q1, q2 = b.register(), b.register()
+    c1, c2 = b.client_id(q1), b.client_id(q2)
+    assert c1 != c2 and not b.wants('lidar')
+    assert b.set_layers(c1, {'lidar'}) == set()
+    assert b.set_layers('yok', {'lidar'}) is None
+    assert b.wants('lidar') and not b.wants('costmap')
+    b.publish('scan', {'r': [1]}, layer='lidar')
+    b.publish('pose', {'x': 1})  # katmansız olay herkese
+    assert drain(q1) == [sse_event('scan', {'r': [1]}), sse_event('pose', {'x': 1})]
+    assert drain(q2) == [sse_event('pose', {'x': 1})]
+    b.send_to(c2, 'costmap', {'w': 2})
+    assert drain(q2) == [sse_event('costmap', {'w': 2})] and drain(q1) == []
+    b.unregister(q1)
+    assert not b.wants('lidar') and b.client_id(q1) is None
+
+
+class FakeLive:
+    def __init__(self, snapshots):
+        self.snapshots = snapshots
+
+    def layer_snapshot(self, layer):
+        return self.snapshots.get(layer)
+
+
+def test_katman_istegi_ve_yeni_acilan_katmanin_son_hali():
+    b = Broadcaster()
+    q = b.register()
+    cid = b.client_id(q)
+    live = FakeLive({'costmap': ('costmap', {'w': 3}), 'clusters': ('clusters', {'c': []})})
+    assert set_layers(b, live, {'client': cid, 'costmap': True, 'clusters': True}) == (
+        200, {'client': cid, 'layers': ['clusters', 'costmap']})
+    assert drain(q) == [sse_event('clusters', {'c': []}), sse_event('costmap', {'w': 3})]
+    # Zaten açık katman yeniden gönderilmez; kapatılan katmanın olayı artık gelmez.
+    assert set_layers(b, live, {'client': cid, 'costmap': True, 'lidar': True})[0] == 200
+    assert drain(q) == []
+    b.publish('clusters', {'c': [[1, 2, 0.1]]}, layer='clusters')
+    assert drain(q) == []
+    assert set_layers(b, live, {'client': 'c999', 'lidar': True})[0] == 404
+    assert set_layers(b, live, {'lidar': True})[0] == 400
+    assert set_layers(b, live, {'client': cid, 'lidar': 'evet'})[0] == 400
 
 
 class FakePanel:
@@ -228,6 +279,8 @@ def test_sse_hello_olay_ve_kapanis(server):
     assert r.readline() == b'event: hello\n'
     hello = json.loads(r.readline()[len(b'data: '):])
     assert hello['clients'] == 1
+    assert hello['client'] == server.panel.broadcaster.client_id(
+        next(iter(server.panel.broadcaster._clients)))  # katmanlar bu kimlikle bildirilir
     assert r.readline() == b'\n'
 
     server.panel.broadcaster.publish('durum', {'görev': 'S1'})

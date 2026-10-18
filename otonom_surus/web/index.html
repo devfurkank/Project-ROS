@@ -89,6 +89,15 @@
         <button type="button" id="confirmNo" class="btn sm">Vazgeç</button>
       </div>
       <canvas id="map" aria-label="Harita"></canvas>
+      <div id="layerbar" class="playbar layerbar">
+        <span class="label-inline">Katman</span>
+        <div class="chips" role="group" aria-label="Harita katmanları">
+          <button type="button" class="chip" data-layer="lidar" aria-pressed="false" title="LiDAR taraması: ışınlar ve isabet noktaları (5 Hz)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M12 12L20 6M12 12l8 2M12 12l6 7"/><path d="M5 12a7 7 0 0 1 2-5"/></svg>LiDAR</button>
+          <button type="button" class="chip" data-layer="costmap" aria-pressed="false" title="Nav2 global costmap: engellerin çevresindeki maliyet (1 Hz)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>Costmap</button>
+          <button type="button" class="chip" data-layer="clusters" aria-pressed="false" title="obstacle_detector’ın algıladığı engel kümeleri (RViz’deki kırmızı silindirler)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="4" stroke-dasharray="3 2"/><circle cx="16" cy="15" r="4" stroke-dasharray="3 2"/></svg>Kümeler</button>
+        </div>
+        <span id="layerMsg" class="small toolmsg"></span>
+      </div>
       <div id="tlBox" class="tlbox" style="display:none">
         <p class="label">Zaman çizelgesi · tıkla ya da sürükle (klavyede ← → 1 s, Shift ile 10 s, boşluk oynat)</p>
         <canvas id="tl" tabindex="0" aria-label="Zaman çizelgesi"></canvas>

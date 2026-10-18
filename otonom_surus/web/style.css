@@ -31,6 +31,10 @@
   /* Panelin müdahaleleri: atılan kutu (Gazebo'daki rengiyle aynı ton) ve elle verilen hedef */
   --map-thrown: #c2357e;
   --map-manual: #7a52cc;
+  /* Katmanlar (P7): costmap tek tonlu mor rampa (maliyet arttıkça saydamlık azalır); LiDAR
+     robotun mavisiyle (kırmızı isabetler turuncu hareketli kutularla ayırt edilemiyordu:
+     doğrulayıcıda ΔE 4.7); kümeler nötr mürekkeple kesikli halka. */
+  --map-cost: #6250d6;
   /* Canlı SLAM haritası: boş hücre zeminle aynı, dolu hücre koyu; bilinmeyen alan sisli */
   --map-free: #f0eee6;
   --map-slam: #44433f;
@@ -74,6 +78,7 @@
     --map-wall: #b4b2a9;
     --map-thrown: #dd5c9e;
     --map-manual: #a68bf0;
+    --map-cost: #9085e9;
     --map-free: #262624;
     --map-slam: #d3d1c7;
     --map-fog: rgba(136, 135, 128, 0.32);
@@ -293,6 +298,7 @@ select:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 
 }
 .confirm #confirmText { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #map.tool { cursor: crosshair; touch-action: none; }
+.layerbar { margin: 8px 0 0; }
 #rpTime { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .tlbox { margin-top: 10px; }
 .tlbox .label { margin-bottom: 4px; }

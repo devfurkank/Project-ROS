@@ -28,6 +28,9 @@ Uç noktalar:
     POST /api/goal        {"x": 2.0, "y": 1.0, "yaw_deg": 90}: elle hedef (map çerçevesi)
     POST /api/obstacle    {"x": 1.2, "y": 2.4}: 0.4 m'lik statik kutu at
     DELETE /api/obstacle  {"name": "panel_kutu_1"} ya da boş gövde: bir kutuyu ya da hepsini kaldır
+    POST /api/layers      {"client": "c3", "lidar": true, "costmap": false, "clusters": true}:
+                          sekmenin katmanları (kimlik hello'da); açılan katmanın son hali hemen
+                          gönderilir. Katman olayları: scan, clusters, costmap
     GET  /api/runs        geçmiş koşular, en yeni önce (?world=senaryo2.world)
     GET  /api/runs/<kimlik>             tek koşu (kimlik: s1_r1, parametre_fpd2/s2_r1 ...)
     GET  /api/runs/<kimlik>/trajectory  yörünge [[t, x, y], ...] (?dt=0.5: seyreltilmiş)
@@ -52,7 +55,7 @@ import xml.etree.ElementTree as ET
 from ament_index_python.packages import get_package_share_directory
 from otonom_surus.panel_control import (
     check_box, check_goal, ControlError, Controller, grid_of, lane_aabbs)
-from otonom_surus.panel_live import LiveBridge
+from otonom_surus.panel_live import LAYERS, LiveBridge
 from otonom_surus.panel_process import RunError, RunManager
 from otonom_surus.panel_runs import RunIndex
 from otonom_surus.scenarios import load_scenario, scenario_numbers
@@ -61,7 +64,7 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
-VERSION = '0.6.0'
+VERSION = '0.7.0'
 HOST = '127.0.0.1'  # bilerek parametre değil: panelin ağa açılmaması için (PT18)
 PING_PERIOD = 5.0  # s; istemci 10 s veri alamazsa bağlantıyı kopmuş sayar
 SSE_RETRY_MS = 3000  # tarayıcının kopunca yeniden bağlanma aralığı
@@ -151,37 +154,100 @@ def runs_route(index, path, query):
     return 200, record
 
 
+def set_layers(broadcaster, live, body):
+    """
+    POST /api/layers: sekmenin açtığı katmanlar; (HTTP durum kodu, JSON verisi).
+
+    body: {"client": "c3", "lidar": true, ...}; bilinmeyen katman adı yok sayılır. Yeni açılan
+    katmanın son hali (live.layer_snapshot) yalnızca o sekmeye hemen gönderilir: costmap
+    değişmedikçe yeniden yayınlanmadığından yoksa sekme onu hiç görmezdi.
+    """
+    client = body.get('client')
+    if not isinstance(client, str):
+        return 400, {'error': 'client (sekme kimliği) metin olmalı'}
+    if any(not isinstance(body.get(name, False), bool) for name in LAYERS):
+        return 400, {'error': f'katmanlar ({", ".join(LAYERS)}) true ya da false olmalı'}
+    layers = {name for name in LAYERS if body.get(name)}
+    before = broadcaster.set_layers(client, layers)
+    if before is None:
+        return 404, {'error': f'sekme bulunamadı: {client} (bağlantı yenilenmiş olabilir)'}
+    for name in sorted(layers - before):
+        snapshot = live.layer_snapshot(name)
+        if snapshot is not None:
+            broadcaster.send_to(client, *snapshot)
+    return 200, {'client': client, 'layers': sorted(layers)}
+
+
 class Broadcaster:
-    """Olayları bağlı her SSE istemcisinin kuyruğuna dağıtır; dolan kuyrukta en eski olay düşer."""
+    """
+    Olayları bağlı her SSE istemcisinin kuyruğuna dağıtır; dolan kuyrukta en eski olay düşer.
+
+    Her istemcinin (sekmenin) bir kimliği ve açtığı katmanlar vardır (P7): katman olayları
+    (layer verilerek yayınlanan) yalnızca o katmanı açmış sekmelere gider, böylece kapalı katmanın
+    verisi ne üretilir ne gönderilir (PT16). Katmanlar sekme başına: iki sekme farklı katmanlar
+    seçebilir.
+    """
 
     def __init__(self, maxsize=CLIENT_QUEUE):
         self._lock = threading.Lock()
-        self._clients = set()
+        self._clients = {}  # kuyruk -> {'id': 'c1', 'layers': set()}
+        self._next = 1
         self._maxsize = maxsize
         self.closed = False
 
     def register(self):
         q = queue.Queue(self._maxsize)
         with self._lock:
-            self._clients.add(q)
+            self._clients[q] = {'id': f'c{self._next}', 'layers': set()}
+            self._next += 1
             if self.closed:
                 q.put_nowait(None)
         return q
 
     def unregister(self, q):
         with self._lock:
-            self._clients.discard(q)
+            self._clients.pop(q, None)
 
     def count(self):
         with self._lock:
             return len(self._clients)
 
-    def publish(self, event, data):
-        frame = sse_event(event, data)
+    def client_id(self, q):
         with self._lock:
-            clients = list(self._clients)
+            client = self._clients.get(q)
+        return client['id'] if client else None
+
+    def set_layers(self, client_id, layers):
+        """İstemcinin katmanlarını değiştirir; önceki katmanlar, istemci yoksa None."""
+        with self._lock:
+            for client in self._clients.values():
+                if client['id'] == client_id:
+                    before, client['layers'] = client['layers'], set(layers)
+                    return before
+        return None
+
+    def wants(self, layer):
+        """Bu katmanı açmış bağlı bir sekme var mı."""
+        with self._lock:
+            return any(layer in c['layers'] for c in self._clients.values())
+
+    def publish(self, event, data, layer=None):
+        """Olayı dağıtır; layer verilirse yalnızca o katmanı açmış sekmelere."""
+        with self._lock:
+            clients = [q for q, c in self._clients.items()
+                       if layer is None or layer in c['layers']]
+        if not clients:
+            return
+        frame = sse_event(event, data)
         for q in clients:
             self._put(q, frame)
+
+    def send_to(self, client_id, event, data):
+        """Olayı yalnızca bir sekmeye gönderir (ör. katmanı yeni açana son hali)."""
+        with self._lock:
+            clients = [q for q, c in self._clients.items() if c['id'] == client_id]
+        for q in clients:
+            self._put(q, sse_event(event, data))
 
     def close(self):
         """Kapanışı bildirir: her kuyruğa None konur, akış döngüleri bağlantıyı kapatır."""
@@ -301,7 +367,9 @@ class PanelHandler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'no-cache')
             self.end_headers()
             self.wfile.write(f'retry: {SSE_RETRY_MS}\n\n'.encode('ascii'))
-            self.wfile.write(sse_event('hello', panel.hello()))
+            # Sekmenin kimliği: katmanlarını POST /api/layers'a bununla bildirir.
+            hello = dict(panel.hello(), client=panel.broadcaster.client_id(q))
+            self.wfile.write(sse_event('hello', hello))
             self.wfile.flush()
             while True:
                 try:
@@ -354,7 +422,7 @@ class PanelServer(Node):
         self.announced = set()  # bittiği runs_changed ile duyurulan görevler (run_id)
         self.geometries = {}  # dünya dosyası -> world_geometry (müdahale denetimleri)
         self.live = LiveBridge(self, self.broadcaster.publish, on_status=self.on_mission_status,
-                               movers=self.mover_names())
+                               movers=self.mover_names(), wants=self.broadcaster.wants)
         self.control = Controller(self, self.broadcaster.publish)
         # scenarios_file varsayılansa komuta yazılmaz (launch'ın varsayılanı aynı dosya).
         custom = None if self.scenarios_file == default_scenarios else self.scenarios_file
@@ -437,6 +505,7 @@ class PanelServer(Node):
             ('POST', '/api/goal'): lambda: self.goal(body),
             ('POST', '/api/obstacle'): lambda: self.add_obstacle(body),
             ('DELETE', '/api/obstacle'): lambda: self.remove_obstacles(body),
+            ('POST', '/api/layers'): lambda: set_layers(self.broadcaster, self.live, body),
         }
         handler = handlers.get((method, path))
         if handler is None:
