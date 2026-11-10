@@ -11,3 +11,6 @@ __pycache__/
 
 # Editör
 .vscode/
+
+# Web paneli koşuları (kişisel deneme; teslim verisi değil, bag'ler büyük)
+results/panel/

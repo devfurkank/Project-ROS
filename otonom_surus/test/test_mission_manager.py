@@ -1,17 +1,21 @@
 """Senaryo okuma ve mission_manager metrik fonksiyonlarının ROS gerektirmeyen birim testleri."""
 
 import csv
+import json
 import math
 import os
 import xml.etree.ElementTree as ET
 
-from otonom_surus.mission_manager import append_csv, PathRecorder, straight_line_length
-from otonom_surus.scenarios import load_scenario
+from otonom_surus.mission_manager import (
+    append_csv, CANCELED, event_line, mission_status, panel_event, PathRecorder, RECOVERY_HOLD,
+    replace_queue, run_meta, run_outcome, straight_line_length)
+from otonom_surus.scenarios import load_scenario, scenario_numbers
 import pytest
 import yaml
 
 PACKAGE = os.path.join(os.path.dirname(__file__), '..')
 SCENARIOS = os.path.join(PACKAGE, 'config', 'scenarios.yaml')
+WORLDS = os.path.join(PACKAGE, 'worlds')
 
 
 def write_yaml(tmp_path, data):
@@ -29,6 +33,13 @@ def test_paketteki_her_senaryonun_dunyasi_ve_hedefleri_var():
         scenario = load_scenario(SCENARIOS, number)
         assert os.path.isfile(os.path.join(PACKAGE, 'worlds', scenario['world']))
         assert scenario['goals']
+
+
+def test_senaryo_numaralari_sirali_ve_tamsayi(tmp_path):
+    goal = {'world': 'w.world', 'goals': [[0, 0, 0]]}
+    assert scenario_numbers(write_yaml(tmp_path, {3: goal, 1: goal, 'not': goal})) == [1, 3]
+    numbers = scenario_numbers(SCENARIOS)
+    assert numbers == sorted(numbers) and {1, 2, 3, 4, 5} <= set(numbers)
 
 
 def test_senaryo1_hedefi():
@@ -103,6 +114,154 @@ def test_kus_ucusu_mesafe_hedefleri_sirayla_dolasir():
     goals = [(4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]
     assert math.isclose(straight_line_length((0.0, 0.0), goals), 12.0)
     assert math.isclose(straight_line_length((0.0, 0.0), [(3.0, 4.0)]), 5.0)
+
+
+GOALS = [(4.0, 0.0, math.pi / 2), (4.0, 4.0, math.pi), (0.0, 4.0, -math.pi / 2)]
+
+
+def goal_row(result, recoveries):
+    """navigate()'in döndürdüğü satırın durum için gereken alanları."""
+    return {'result': result, 'recoveries': recoveries}
+
+
+def test_durum_nav2_beklenirken():
+    status = mission_status(2, 'p1', '/tmp/r', 'waiting_nav2', GOALS, [], now=12.0)
+    assert status == {
+        'v': 1, 'mode': 'scenario', 'state': 'waiting_nav2', 'scenario': 2, 'run_id': 'p1',
+        'results_dir': '/tmp/r', 't0': None, 't': None, 'goal_index': None, 'goal_count': 3,
+        'goal': None, 'goals': [[4.0, 0.0, 90.0, 'scenario'], [4.0, 4.0, 180.0, 'scenario'],
+                                [0.0, 4.0, -90.0, 'scenario']],
+        'goal_results': [], 'recoveries': 0, 'distance': 0.0, 'min_obstacle': None}
+    json.dumps(status, allow_nan=False)  # tarayıcının JSON.parse'ı Infinity'yi kabul etmez
+
+
+def test_durum_hedef_sonuclari_ve_kurtarma_toplami():
+    done = [goal_row('SUCCEEDED', 2), goal_row('FAILED', 15)]
+    status = mission_status(2, 'p1', '/tmp/r', 'running', GOALS, done, now=150.0, t0=20.0,
+                            current=3, current_recoveries=1, distance=12.34567,
+                            min_distance=0.4567)
+    assert status['state'] == 'running' and status['t'] == 130.0 and status['t0'] == 20.0
+    assert status['goal_index'] == 3 and status['goal'] == [0.0, 4.0, -90.0]
+    assert status['goal_results'] == ['SUCCEEDED', 'FAILED']
+    assert status['recoveries'] == 2 + 15 + 1
+    assert status['distance'] == 12.346 and status['min_obstacle'] == 0.457
+    assert 'result' not in status
+
+
+def test_durum_kurtarma_bir_sure_recovering_kalir():
+    def state(now):
+        return mission_status(1, 'p', '', 'running', GOALS, [], now=now, t0=0.0, current=1,
+                              current_recoveries=1, last_recovery=40.0)['state']
+    assert state(40.0) == 'recovering'
+    assert state(40.0 + RECOVERY_HOLD - 0.1) == 'recovering'
+    assert state(40.0 + RECOVERY_HOLD + 0.1) == 'running'
+
+
+def test_durum_bitince_sonuc():
+    ok = [goal_row('SUCCEEDED', 0)] * 3
+    status = mission_status(2, 'p', '', 'finished', GOALS, ok, now=93.0, t0=1.0,
+                            last_recovery=92.0)
+    assert status['state'] == 'finished' and status['result'] == 'SUCCEEDED'
+    assert status['goal_index'] is None and status['t'] == 92.0
+    failed = [goal_row('SUCCEEDED', 0), goal_row('TIMEOUT', 3), goal_row('FAILED', 1)]
+    status = mission_status(2, 'p', '', 'finished', GOALS, failed, now=300.0, t0=1.0)
+    assert status['result'] == 'TIMEOUT' and status['recoveries'] == 4
+
+
+def test_panel_hedefi_kalan_kuyrugun_yerine_gecer():
+    goals = [(*g, 'scenario') for g in GOALS]
+    manual = (2.0, 1.0, math.pi / 2, 'panel')
+    # Hedef 2 yürütülürken iptal edildi: 1 ve 2 (CANCELED) biter, 3'ün yerine elle hedef.
+    queue, dropped = replace_queue(goals, 2, manual)
+    assert queue == goals[:2] + [manual] and dropped == goals[2:]
+    # Serbest sürüşte kuyruk boş ya da bitmiş: hedef sona eklenir, bırakılan yok.
+    assert replace_queue([], 0, manual) == ([manual], [])
+    assert replace_queue(queue, 3, goals[0]) == (queue + [goals[0]], [])
+    assert goals == [(*g, 'scenario') for g in GOALS]  # girdi değişmez
+
+
+def row(index, result, recoveries=0):
+    return {'goal_index': index, 'result': result, 'recoveries': recoveries}
+
+
+def test_iptal_edilen_hedef_basarisizlik_sayilmaz():
+    goals = [(*GOALS[0], 'scenario'), (*GOALS[1], 'scenario'), (2.0, 1.0, 0.0, 'panel')]
+    results = [row(1, 'SUCCEEDED'), row(2, CANCELED, 1), row(3, 'SUCCEEDED')]
+    failed, reached, counted = run_outcome(goals, results)
+    assert failed is None and reached == 2 and counted == [goals[0], goals[2]]
+    status = mission_status(2, 'p', '', 'finished', goals, results, now=50.0, t0=1.0,
+                            mode='scenario')
+    assert status['result'] == 'SUCCEEDED' and status['goal_results'][1] == CANCELED
+    assert status['recoveries'] == 1 and status['goals'][2] == [2.0, 1.0, 0.0, 'panel']
+
+    # İptalden sonra elle hedef başarısız: koşu onun sonucuyla biter.
+    results[2] = row(3, 'FAILED', 4)
+    failed, reached, counted = run_outcome(goals, results)
+    assert failed['goal_index'] == 3 and reached == 1 and len(counted) == 2
+    # Panel müdahale etmediyse Faz 8'deki gibi: yürütülmeyen hedefler de sayılır
+    # (stop_on_failure).
+    failed, reached, counted = run_outcome(goals[:2], [row(1, 'ABORTED')])
+    assert failed['result'] == 'ABORTED' and reached == 0 and counted == goals[:2]
+
+
+def test_serbest_suruste_durum_ve_elle_hedef():
+    goal = (1.5, -0.5, -math.pi / 2, 'panel')
+    idle = mission_status(1, 'p', '', 'idle', [], [], now=30.0, t0=10.0, mode='interactive')
+    assert (idle['mode'], idle['state'], idle['goals'], idle['goal_count']) == (
+        'interactive', 'idle', [], 0)
+    going = mission_status(1, 'p', '', 'running', [goal], [], now=31.0, t0=10.0, current=1,
+                           mode='interactive')
+    assert going['goal'] == [1.5, -0.5, -90.0] and going['goals'] == [[1.5, -0.5, -90.0, 'panel']]
+    done = mission_status(1, 'p', '', 'finished', [], [], now=40.0, t0=10.0, mode='interactive')
+    assert done['result'] == 'SUCCEEDED'  # hiç hedef verilmeden bitirildi
+
+
+def test_panel_olayi_dogrulanir():
+    assert panel_event({'type': 'finish'}) == ('finish', {})
+    assert panel_event({'type': 'spawn', 'name': 'panel_kutu_1', 'x': '1.2345', 'y': 2,
+                        'size': [0.4, 0.4, 0.5], 'fazla': 1}) == (
+        'spawn', {'name': 'panel_kutu_1', 'x': 1.234, 'y': 2.0, 'size': [0.4, 0.4, 0.5]})
+    assert panel_event({'type': 'delete', 'name': 'panel_kutu_1'}) == (
+        'delete', {'name': 'panel_kutu_1'})
+    for bad in ({'type': 'spawn', 'name': 'k', 'x': 1, 'y': 2},  # boyut yok
+                {'type': 'spawn', 'name': 'k', 'x': 'nan', 'y': 2, 'size': [1, 1, 1]},
+                {'type': 'spawn', 'x': 1, 'y': 2, 'size': [1, 1, 1]},  # ad yok
+                {'type': 'delete', 'name': ''}, {'type': 'goal', 'name': 'k'},
+                {'type': 'cancel', 'index': 2}, ['finish'], 'finish', None):
+        assert panel_event(bad) is None, bad
+
+
+def test_olay_satiri_bicimi_ve_zaman_kokeni():
+    t0 = 123.456
+    line = event_line(143.856 - t0, 'spawn', {'name': 'panel_kutu_1', 'x': 1.2, 'y': 2.4,
+                                              'size': [0.4, 0.4, 0.5]})
+    assert '\n' not in line
+    assert json.loads(line) == {'t': 20.4, 'type': 'spawn', 'name': 'panel_kutu_1', 'x': 1.2,
+                                'y': 2.4, 'size': [0.4, 0.4, 0.5]}
+    assert list(json.loads(line))[:2] == ['t', 'type']  # okunaklı: önce zaman ve tür
+    # Kayıt başlamadan (Nav2 beklenirken) gelen olay negatif t ile yazılır.
+    assert json.loads(event_line(120.0 - t0, 'spawn', {}))['t'] == -3.46
+    assert json.loads(event_line(31.0, 'cancel', {'index': 2, 'reason': 'panel hedefi'})) == {
+        't': 31.0, 'type': 'cancel', 'index': 2, 'reason': 'panel hedefi'}
+    with pytest.raises(ValueError):
+        event_line(float('nan'), 'spawn', {})
+
+
+def test_meta_kaydi(tmp_path):
+    scenario = load_scenario(SCENARIOS, 3)
+    world = os.path.join(WORLDS, scenario['world'])
+    meta = run_meta(3, 'p1', 'panel', 'scenario', 12.3456, scenario, world, '/p/nav2.yaml',
+                    'abc1234')
+    assert (meta['v'], meta['scenario'], meta['run_id'], meta['source'], meta['mode']) == (
+        1, 3, 'p1', 'panel', 'scenario')
+    assert meta['t0'] == 12.346 and meta['world_file'] == world and not meta['detailed']
+    assert meta['scenario_def']['goals'] == [[4.0, 4.0, 90.0]]
+    assert [o['name'] for o in meta['scenario_def']['moving_obstacles']] == ['engel1', 'engel2']
+    assert len(meta['world_geometry']['shapes']) == 8  # dünyası çizilebilir (P9)
+    json.dumps(meta, allow_nan=False)
+    missing = run_meta(3, 'p1', 'terminal', 'interactive', 0.0, scenario,
+                       str(tmp_path / 'yok.world'), '', None)
+    assert missing['world_geometry'] is None and missing['git_commit'] is None
 
 
 def test_csv_basligi_bir_kez_yazilir(tmp_path):

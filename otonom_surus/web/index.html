@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Otonom sürüş paneli</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h6.5a3.5 3.5 0 0 0 0-7h-5a3.5 3.5 0 0 1 0-7H16"/></svg>
+      </div>
+      <div>
+        <h1>Otonom sürüş paneli</h1>
+        <p class="sub"><span id="conn" class="conn wait" role="status"><span class="dot"></span><span id="connText">Bağlanıyor…</span></span> · TurtleBot3 Burger</p>
+      </div>
+    </div>
+    <nav class="seg" id="modes" aria-label="Mod">
+      <button type="button" data-m="live" class="on" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>Canlı görev</button>
+      <button type="button" data-m="replay" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v4l2.5 2.5"/><path d="M3.5 13a8.5 8.5 0 1 0 2.2-6.2L3 9.5"/><path d="M3 4.5v5h5"/></svg>Tekrar oynat</button>
+      <button type="button" data-m="edit" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L18.5 9.5a2.8 2.8 0 0 0-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>Dünya tasarla</button>
+    </nav>
+  </header>
+
+  <section id="liveTop" class="livetop" aria-label="Dünya ve görev">
+    <div id="worlds" class="worlds"></div>
+    <div class="taskrow">
+      <span class="label-inline">Görev</span>
+      <div id="tasks" class="chips"></div>
+      <span id="worldActs" class="acts"></span>
+      <div class="spacer"></div>
+      <label class="check" title="Görevin hedefleri yüklenmez; hedefleri haritaya tıklayarak sen verirsin. Bitir’e basınca sonuçlar kaydedilir."><input type="checkbox" id="free"> Serbest sürüş</label>
+      <label class="check"><input type="checkbox" id="gz" checked> Gazebo penceresi</label>
+      <label class="check"><input type="checkbox" id="rv"> RViz</label>
+    </div>
+    <div class="cmdrow">
+      <code id="cmd" class="cmd mono" title="Panelin çalıştıracağı komut"></code>
+      <button type="button" id="go" class="btn primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>Başlat</button>
+      <button type="button" id="stop" class="btn"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg><span id="stopText">Durdur</span></button>
+    </div>
+    <p id="err" class="err" role="alert"></p>
+  </section>
+
+  <section id="replayTop" class="livetop" aria-label="Tekrar oynatılacak koşular" style="display:none">
+    <div class="taskrow">
+      <span class="label-inline">Dünya</span>
+      <div id="rpWorlds" class="chips"></div>
+      <span class="spacer"></span>
+      <span id="rpSelCount" class="muted small"></span>
+      <button type="button" id="rpClear" class="btn sm">Seçimi temizle</button>
+    </div>
+    <div class="tablewrap picker">
+      <table class="runs">
+        <thead><tr><th class="c-pick"><span class="sr">Seç</span></th><th class="c-date">Tarih</th><th>Sen.</th><th>Varyant</th><th>Sonuç</th><th class="num">Süre</th><th class="num c-path">Yol</th><th class="c-rec">Kayıt</th></tr></thead>
+        <tbody id="pickRows"></tbody>
+      </table>
+    </div>
+    <p id="pickMsg" class="muted small histmsg"></p>
+  </section>
+
+  <main class="grid">
+    <section class="card mapcard" aria-labelledby="mapTitle">
+      <div class="cardhead">
+        <span class="title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7l6-3 6 3 6-3v13l-6 3-6-3-6 3z"/><path d="M9 4v13M15 7v13"/></svg><span id="mapTitle">Canlı harita</span></span>
+        <span id="coord" class="mono"></span>
+      </div>
+      <div id="playbar" class="playbar" style="display:none">
+        <button type="button" id="rpPlay" class="btn primary sm"><svg id="rpPlayIcon" class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg><span id="rpPlayText">Oynat</span></button>
+        <button type="button" id="rpBack" class="btn sm" aria-label="Başa sar" title="Başa sar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 5v14L8 12z"/><path d="M5 5v14"/></svg></button>
+        <span class="label-inline">Hız</span>
+        <div id="rpSpeeds" class="chips" role="group" aria-label="Oynatma hızı"></div>
+        <span class="spacer"></span>
+        <span id="rpTime" class="mono small" aria-live="off"></span>
+      </div>
+      <div id="toolbar" class="playbar">
+        <span class="label-inline">Fare</span>
+        <div class="chips" role="group" aria-label="Harita aracı">
+          <button type="button" class="chip" data-tool="goal" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/></svg>Hedef ver</button>
+          <button type="button" class="chip" data-tool="box" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>Engel at</button>
+        </div>
+        <button type="button" id="clearBoxes" class="btn sm" title="Atılan kutuların hepsini kaldır"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 20H8.5l-4.2-4.3a1 1 0 0 1 0-1.4l9.6-9.6a1 1 0 0 1 1.4 0l5 5a1 1 0 0 1 0 1.4L11.5 20"/><path d="M18 13.3L10.7 6"/></svg>Temizle<span id="boxCount" class="muted"></span></button>
+        <span id="toolMsg" class="small toolmsg" role="status"></span>
+      </div>
+      <div id="edbar" class="playbar" style="display:none">
+        <span class="label-inline">Araç</span>
+        <div class="chips" role="group" aria-label="Tasarım aracı">
+          <button type="button" class="chip" data-etool="box" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1.5"/></svg>Kutu</button>
+          <button type="button" class="chip" data-etool="cylinder" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>Silindir</button>
+          <button type="button" class="chip" data-etool="wall" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16v6H4z"/><path d="M10 9v6M16 9v6"/></svg>Duvar</button>
+          <button type="button" class="chip" data-etool="goal" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/></svg>Hedef</button>
+          <button type="button" class="chip" data-etool="erase" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 20H8.5l-4.2-4.3a1 1 0 0 1 0-1.4l9.6-9.6a1 1 0 0 1 1.4 0l5 5a1 1 0 0 1 0 1.4L11.5 20"/><path d="M18 13.3L10.7 6"/></svg>Sil</button>
+        </div>
+        <button type="button" id="edUndo" class="btn sm" title="Son değişikliği geri al (Ctrl+Z)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>Geri al</button>
+        <span id="edMsg" class="small toolmsg" role="status"></span>
+      </div>
+      <div id="confirmBar" class="confirm" style="display:none" role="group" aria-label="Elle hedef onayı">
+        <span id="confirmText"></span>
+        <button type="button" id="confirmGo" class="btn primary sm">Gönder</button>
+        <button type="button" id="confirmNo" class="btn sm">Vazgeç</button>
+      </div>
+      <canvas id="map" aria-label="Harita"></canvas>
+      <div id="layerbar" class="playbar layerbar">
+        <span class="label-inline">Katman</span>
+        <div class="chips" role="group" aria-label="Harita katmanları">
+          <button type="button" class="chip" data-layer="lidar" aria-pressed="false" title="LiDAR taraması: ışınlar ve isabet noktaları (5 Hz)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M12 12L20 6M12 12l8 2M12 12l6 7"/><path d="M5 12a7 7 0 0 1 2-5"/></svg>LiDAR</button>
+          <button type="button" class="chip" data-layer="costmap" aria-pressed="false" title="Nav2 global costmap: engellerin çevresindeki maliyet (1 Hz)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>Costmap</button>
+          <button type="button" class="chip" data-layer="clusters" aria-pressed="false" title="obstacle_detector’ın algıladığı engel kümeleri (RViz’deki kırmızı silindirler)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="4" stroke-dasharray="3 2"/><circle cx="16" cy="15" r="4" stroke-dasharray="3 2"/></svg>Kümeler</button>
+        </div>
+        <span id="layerMsg" class="small toolmsg"></span>
+      </div>
+      <div id="tlBox" class="tlbox" style="display:none">
+        <p class="label">Zaman çizelgesi · tıkla ya da sürükle (klavyede ← → 1 s, Shift ile 10 s, boşluk oynat)</p>
+        <canvas id="tl" tabindex="0" aria-label="Zaman çizelgesi"></canvas>
+      </div>
+      <p id="hint" class="hint"></p>
+      <div id="legend" class="legend"></div>
+    </section>
+
+    <aside class="side">
+      <section id="runCard" class="card" aria-label="Koşu">
+        <div class="runhead"><span id="badge" class="badge neutral">Hazır</span><span id="runScn" class="muted small"></span></div>
+        <p id="runGoal" class="runline">Koşu yok</p>
+        <div id="bars" class="bars"></div>
+        <dl id="runSummary" class="kv summary"></dl>
+        <p id="runMsg" class="muted small"></p>
+      </section>
+      <section id="replayCard" class="card" aria-label="Seçili koşular" style="display:none">
+        <div class="runhead"><span class="label flat">Seçili koşular</span><span id="rpCount" class="muted small"></span></div>
+        <div id="rpCards" class="rcards"></div>
+        <p id="rpEmpty" class="muted small flat">Yukarıdaki listeden en çok 6 koşu seç; numaralar haritadaki robotlarla ve zaman çizelgesiyle eşleşir.</p>
+      </section>
+      <section id="editCard" class="card" aria-label="Tasarım" style="display:none">
+        <div class="runhead"><span class="label flat">Tasarım</span><span id="edState" class="badge neutral">Yeni</span></div>
+        <label class="field stack">Ad <input id="edName" type="text" maxlength="40" placeholder="Kendi parkurum" autocomplete="off"></label>
+        <p id="edCount" class="muted small edcount"></p>
+        <p class="label spaced">Hedefler <span class="muted">· ön kontrol yolu</span></p>
+        <ol id="edGoals" class="edgoals"></ol>
+        <ul id="edIssues" class="diff edissues"></ul>
+        <div class="edbtns">
+          <button type="button" id="edSave" class="btn">Kaydet</button>
+          <button type="button" id="edRun" class="btn primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>Kaydet ve başlat</button>
+        </div>
+        <div class="edbtns">
+          <button type="button" id="edSample" class="btn sm">Örnek parkur</button>
+          <button type="button" id="edClear" class="btn sm" title="Şekilleri ve hedefleri sil (ad ve kayıt kalır)">Temizle</button>
+          <button type="button" id="edNew" class="btn sm" title="Kaydedilmemiş yeni bir dünyaya başla">Yeni dünya</button>
+        </div>
+        <p id="edErr" class="err" role="alert"></p>
+        <p class="muted small flat">Ön kontrol tarayıcıda A* ile, Nav2’nin ayarlarıyla (robot yarıçapı 0.125 m, şişirme 0.35 m): robot haritayı bilmeden yola çıkar, asıl planı Nav2 yapar.</p>
+      </section>
+      <section id="diffCard" class="card" aria-label="Fark" style="display:none">
+        <p class="label">Fark <span class="muted">(veriden)</span></p>
+        <ul id="rpDiff" class="diff"></ul>
+      </section>
+      <section id="metrics" class="metrics" aria-label="Metrikler">
+        <div class="mc"><p class="ml">Sim süresi</p><p class="mv" id="mTime">–</p></div>
+        <div class="mc"><p class="ml">Kat edilen yol</p><p class="mv" id="mDist">–</p></div>
+        <div class="mc"><p class="ml">En yakın engel</p><p class="mv" id="mNear">–</p></div>
+        <div class="mc"><p class="ml">Doğrusal hız</p><p class="mv" id="mSpeed">–</p></div>
+        <div class="mc"><p class="ml">Algılanan küme</p><p class="mv" id="mClusters">–</p></div>
+        <div class="mc"><p class="ml">Kurtarma</p><p class="mv" id="mRec">–</p></div>
+      </section>
+      <section class="card">
+        <p class="label">Olaylar</p>
+        <div id="log" class="log mono" aria-live="polite"></div>
+      </section>
+      <section class="card">
+        <p class="label">Sunucu</p>
+        <dl class="kv">
+          <dt>Sürüm</dt><dd id="hVersion">–</dd>
+          <dt>Bağlı sekme</dt><dd id="hClients">–</dd>
+          <dt>Çalışma süresi</dt><dd id="hUptime">–</dd>
+          <dt>Son sinyal</dt><dd id="hSeen">–</dd>
+        </dl>
+        <p class="label spaced">Sonuç klasörü</p>
+        <p id="hResults" class="mono path">–</p>
+      </section>
+    </aside>
+  </main>
+
+  <section id="history" class="card history" aria-labelledby="histTitle">
+    <div class="cardhead">
+      <span class="title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v4l2.5 2.5"/><path d="M3.5 13a8.5 8.5 0 1 0 2.2-6.2L3 9.5"/><path d="M3 4.5v5h5"/></svg><span id="histTitle">Geçmiş koşular</span></span>
+      <span id="histRoot" class="mono path"></span>
+    </div>
+    <div class="histbar">
+      <label class="field">Dünya <select id="fWorld"><option value="">Hepsi</option></select></label>
+      <label class="field">Sonuç <select id="fResult"><option value="">Hepsi</option><option value="ok">Başarılı</option><option value="bad">Başarısız</option></select></label>
+      <span id="histCount" class="muted small"></span>
+      <span class="spacer"></span>
+      <button type="button" id="histReload" class="btn sm"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>Yenile</button>
+    </div>
+    <div class="tablewrap">
+      <table class="runs">
+        <thead><tr><th class="c-date">Tarih</th><th>Sen.</th><th>Görev</th><th class="c-var">Varyant</th><th>Sonuç</th><th class="num">Süre</th><th class="num c-path">Yol</th><th class="num c-eff">Verim</th></tr></thead>
+        <tbody id="runRows"></tbody>
+      </table>
+    </div>
+    <p id="histMsg" class="muted small histmsg"></p>
+  </section>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -28,7 +28,6 @@ import math
 import os
 import sys
 import time
-import xml.etree.ElementTree as ET
 
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Patch, Polygon
@@ -41,6 +40,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGE = os.path.join(REPO, 'otonom_surus')
 sys.path.insert(0, PACKAGE)
 from otonom_surus.scenarios import load_scenario  # noqa: E402, I100
+from otonom_surus.world_sdf import world_shapes  # noqa: E402
 
 NO_RECORD = 'KAYIT_YOK'  # experiments.csv'de var, runs.csv'de yok
 
@@ -236,50 +236,7 @@ def write_markdown(path, results_dir, runs, goals, summary, unrecorded_attempts,
         f.write('\n'.join(out) + '\n')
 
 
-# --- Dünya geometrisi ------------------------------------------------------------------------
-
-def _pose(element):
-    """SDF öğesinin <pose>'u: (x, y, yaw); yoksa sıfır."""
-    text = element.findtext('pose')
-    values = [float(v) for v in text.split()] if text else [0.0] * 6
-    return values[0], values[1], values[5]
-
-
-def _compose(a, b):
-    """Pozları birleştirir: a pozundaki çerçevede verilen b pozunu dış çerçeveye taşır."""
-    ax, ay, at = a
-    bx, by, bt = b
-    return (ax + bx * math.cos(at) - by * math.sin(at),
-            ay + bx * math.sin(at) + by * math.cos(at), at + bt)
-
-
-def world_shapes(path):
-    """
-    Dünyadaki modellerin çarpışma şekilleri (yalnızca <collision>; hedef diski görseldir).
-
-    Her şekil: model, static, kind ('box' | 'cylinder'), x, y, yaw ve size (kutuda (en, boy),
-    silindirde yarıçap).
-    """
-    shapes = []
-    for model in ET.parse(path).getroot().iter('model'):
-        static = model.findtext('static', 'false').strip() == 'true'
-        model_pose = _pose(model)
-        for link in model.findall('link'):
-            link_pose = _compose(model_pose, _pose(link))
-            for collision in link.findall('collision'):
-                x, y, yaw = _compose(link_pose, _pose(collision))
-                geometry = collision.find('geometry')
-                if geometry.find('box') is not None:
-                    sx, sy, _ = (float(v) for v in geometry.findtext('box/size').split())
-                    kind, size = 'box', (sx, sy)
-                elif geometry.find('cylinder') is not None:
-                    kind, size = 'cylinder', float(geometry.findtext('cylinder/radius'))
-                else:
-                    continue  # ground_plane
-                shapes.append({'model': model.get('name'), 'static': static, 'kind': kind,
-                               'x': x, 'y': y, 'yaw': yaw, 'size': size})
-    return shapes
-
+# --- Dünya geometrisi (ayrıştırıcı: otonom_surus/world_sdf.py, web paneliyle ortak) --------
 
 def _rectangle(x, y, yaw, length, width):
     c, s = math.cos(yaw), math.sin(yaw)

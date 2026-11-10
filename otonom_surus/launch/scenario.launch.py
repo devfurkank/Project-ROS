@@ -4,7 +4,8 @@ Bir senaryoyu tek komutla baştan sona koşar: simülasyon + SLAM/Nav2 + görev 
 Senaryonun hareketli engelleri varsa (scenarios.yaml'da moving_obstacles) sim.launch.py onları
 süren obstacle_mover'ı da başlatır. mission_manager senaryonun hedeflerini sırayla gönderir,
 sonuçları ve SLAM haritasını results_dir'e yazıp çıkar; bu launch da onunla birlikte
-kendiliğinden kapanır.
+kendiliğinden kapanır. mode:=interactive serbest sürüştür (free.launch.py): hedefleri web paneli
+verir, görev panelin "bitir"iyle biter.
 
 Kullanım:
     ros2 launch otonom_surus scenario.launch.py scenario:=1 gui:=true rviz:=true run_id:=deneme1
@@ -39,6 +40,9 @@ def generate_launch_description():
             'goal_timeout': ParameterValue(arg('goal_timeout'), value_type=float),
             'results_dir': ParameterValue(arg('results_dir'), value_type=str),
             'scenarios_file': ParameterValue(arg('scenarios_file'), value_type=str),
+            'params_file': ParameterValue(arg('params_file'), value_type=str),
+            'mode': ParameterValue(arg('mode'), value_type=str),
+            'source': ParameterValue(arg('source'), value_type=str),
         }])
 
     return LaunchDescription([
@@ -63,6 +67,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'params_file', default_value=os.path.join(share, 'config', 'nav2_params.yaml'),
             description='Nav2 parametre dosyası (deneylerde başka bir ayar denemek için)'),
+        DeclareLaunchArgument(
+            'mode', default_value='scenario',
+            description='scenario: senaryonun hedefleri | interactive: hedefleri panel verir'),
+        DeclareLaunchArgument(
+            'source', default_value='terminal',
+            description='Koşuyu başlatan (meta kaydına): terminal | run_experiments | panel'),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(launch_dir, 'sim.launch.py')),
